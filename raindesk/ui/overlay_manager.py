@@ -2,12 +2,15 @@
 
 الغرض: يدير نوافذ overlay (واحدة لكل شاشة مختارة) ويقود المحاكاة المشتركة بينها.
 المسؤوليات: اختيار الشاشات وإعادة البناء مع إعادة استخدام النوافذ، وأسباب الإيقاف، وحارس
-    التثبيت، وتنعيم المعاملات (ParamSmoother) والعصف المشترك، وتمرير tick إلى كل النوافذ.
-الاعتماديات: config.store وengine (math_utils وparams) وui.frame_clock وui.overlay_window.
+    التثبيت، وتنعيم المعاملات (ParamSmoother)، والعصف المشترك، وآلة الطقس التلقائي، وبرق واحد
+    مشترك بين الشاشات، والجودة التكيفية، وتمرير tick إلى كل النوافذ.
+الاعتماديات: config.store وengine (math_utils وparams وweather_fsm وadaptive_quality)
+    وui.frame_clock وui.overlay_window وplatform_win.win32_api.
 النمط التصميمي: Mediator بين FrameClock والنوافذ، مع Debounce لأحداث توصيل الشاشات.
-ملاحظات: العصف والمعاملات المنعّمة مشتركة بين الشاشات كي تتحرك الرياح بتناسق عبر الأجهزة.
-    الإيقاف = hide() + إيقاف الساعة (لا نُتلف النوافذ لتجنّب الوميض). تُضاف آلة الطقس لاحقًا
-    عبر _weather_overrides().
+ملاحظات: العصف والمعاملات والطقس والبرق مشتركة بين الشاشات كي تتحرك الرياح بتناسق عبر الأجهزة.
+    الإيقاف = hide() + إيقاف الساعة (لا نُتلف النوافذ لتجنّب الوميض). البرق يُجبَر على الإيقاف
+    إن عطّل المستخدم رسوم Windows المتحركة (حساسية الضوء). الطقس التلقائي يتقدم على الإعدادات
+    اليدوية للقيم السبع المقابلة لمفاتيح PRESETS ويُنعَّم عبر ParamSmoother.
 مثال: manager = OverlayManager(store, clock); manager.rebuild()
 """
 
@@ -15,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 from collections.abc import Mapping
 from typing import Final
 
@@ -24,8 +28,11 @@ from PySide6.QtGui import QGuiApplication, QScreen
 
 from raindesk.config.store import SettingsStore
 from raindesk.core.constants import TOPMOST_WATCHDOG_INTERVAL_MS
+from raindesk.engine.adaptive_quality import AdaptiveQuality
 from raindesk.engine.math_utils import gust_signal
 from raindesk.engine.params import ParamSmoother, params_from_settings
+from raindesk.engine.weather_fsm import LightningModel, WeatherStateMachine
+from raindesk.platform_win import win32_api
 from raindesk.ui.frame_clock import FrameClock
 from raindesk.ui.overlay_window import OverlayWindow, compute_screen_key
 
@@ -34,13 +41,43 @@ _LOG = logging.getLogger(__name__)
 _HOTPLUG_DEBOUNCE_MS: Final[int] = 150  # ms: دمج أحداث توصيل/فصل الشاشات المتلاحقة
 _MIN_GUST_PERIOD_S: Final[float] = 0.1  # ثانية: حماية القسمة (المخطط يضمن >= 2)
 _GUST_PHASE_COUNT: Final[int] = 3  # عدد مكوّنات العصف (طور عشوائي لكل مكوّن)
+_DEFAULT_FPS: Final[int] = 30
 _KNOWN_REASONS: Final[frozenset[str]] = frozenset(
     {"user_disabled", "fullscreen", "session_inactive", "battery_saver"}
 )
 # مفاتيح تتطلب من النوافذ إعادة قراءة خيارات الرسم (يعالجها المدير بنفسه).
 _RENDER_KEYS: Final[frozenset[str]] = frozenset(
-    {"antialiasing", "quality", "splash_zone"}
+    {
+        "antialiasing",
+        "quality",
+        "splash_zone",
+        "edge_streams_enabled",
+        "edge_streams_count",
+        "edge_streams_opacity",
+        "mood_enabled",
+        "mood_color",
+        "mood_opacity",
+        "debug_hud",
+    }
 )
+# مفاتيح تعيد ضبط الطقس التلقائي والبرق والجودة التكيفية.
+_EFFECT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "auto_weather",
+        "auto_weather_variability",
+        "lightning_enabled",
+        "lightning_frequency",
+        "adaptive_quality",
+        "fps_cap",
+    }
+)
+
+
+def _as_float(value: object, default: float = 0.0) -> float:
+    """قيمة إعداد عددية أو الافتراضي (bool ليس رقمًا هنا)."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return default
 
 
 class OverlayManager(QObject):
@@ -80,8 +117,13 @@ class OverlayManager(QObject):
         )
         # عدد دورات العصف المنقضية: نتكامل dt / T بدل t / T كي لا يقفز الطور عند تغيير الدورة T.
         self._gust_cycles = 0.0
-        self._smoother = ParamSmoother(params_from_settings(store.snapshot()))
+        self._snapshot = store.snapshot()  # نسخة مخبأة تُجدَّد عند تغيّر الإعدادات فقط
+        self._smoother = ParamSmoother(params_from_settings(self._snapshot))
         self._target_dirty = False
+        self._weather = WeatherStateMachine(random.Random(self._derive_seed()))
+        self._lightning = LightningModel(random.Random(self._derive_seed()))
+        self._adaptive = AdaptiveQuality()
+        self._configure_effects()
 
         self._rebuild_timer = QTimer(self)
         self._rebuild_timer.setSingleShot(True)
@@ -126,6 +168,10 @@ class OverlayManager(QObject):
             self._sync_run_state()
 
     # ------------------------------------------------------------------ البناء
+    def _derive_seed(self) -> int:
+        """بذرة عدد صحيح لـ random.Random من SeedSequence (حتمية إذا ثُبّتت rng_seed)."""
+        return int(self._seed_sequence.spawn(1)[0].generate_state(1)[0])
+
     def _selected_screens(self) -> list[QScreen]:
         """الشاشات المطلوبة حسب screens_mode؛ إن لم يطابق الاختيار شيئًا نرجع للشاشة الأساسية."""
         primary = QGuiApplication.primaryScreen()
@@ -192,12 +238,15 @@ class OverlayManager(QObject):
             window.show()  # لا أثر إن كانت ظاهرة أصلًا
             window.reassert_topmost()
         self.refresh_options()
+        if not self._clock.is_running:
+            self._adaptive.reset()  # بعد إيقاف مؤقت تُقدَّر الأحمال من جديد (لا متوسطات قديمة)
         self._clock.start()
 
     def refresh_options(self) -> None:
-        """يعيد قراءة الخيارات الحية: خيارات الرسم وحارس التثبيت واستثناء اللقطات."""
+        """يعيد قراءة الخيارات الحية: الرسم والحارس واستثناء اللقطات وحالة الطقس والبرق."""
         for window in self._windows:
             window.refresh_render_options()
+        self._configure_effects()  # idempotent: لا يعيد ضبط الطقس أو البرق إلا عند تغيّر الحالة
         if self.paused or not self._windows:
             self._watchdog.stop()
             return
@@ -209,16 +258,41 @@ class OverlayManager(QObject):
         else:
             self._watchdog.stop()
 
-    # ------------------------------------------------------------------ المحاكاة المشتركة
+    # ------------------------------------------------------------------ الطقس والبرق والجودة
+    def _configure_effects(self) -> None:
+        """يضبط الطقس والبرق والجودة التكيفية من الإعدادات.
+
+        البرق يُجبَر على الإيقاف إن عُطّلت رسوم Windows. الدالة idempotent: لا تعيد ضبط شيء
+        إلا عند تغيّر الحالة الفعلية.
+        """
+        get = self._store.get
+        self._adaptive.configure(
+            bool(get("adaptive_quality")),
+            round(_as_float(get("fps_cap"), _DEFAULT_FPS)),
+        )
+        self._weather.set_variability(_as_float(get("auto_weather_variability"), 0.5))
+        self._weather.set_enabled(bool(get("auto_weather")))
+        animations_ok = win32_api.client_animations_enabled()
+        self._lightning.configure(
+            bool(get("lightning_enabled")) and animations_ok,
+            _as_float(get("lightning_frequency"), 0.3),
+        )
+
     def _weather_overrides(self) -> Mapping[str, float] | None:
-        """قيم تتقدم على الإعدادات من آلة الطقس؛ لا شيء حتى تُضاف آلة الطقس (مرحلة لاحقة)."""
-        return None
+        """قيم الطقس التلقائي إن كان مفعّلًا (تتقدم على الإعدادات)، وإلا لا شيء."""
+        return self._weather.blended_values() if self._weather.enabled else None
+
+    # ------------------------------------------------------------------ المحاكاة المشتركة
+    def _apply_target(self) -> None:
+        """يبني الهدف من النسخة المخبأة وقيم الطقس (إن وُجدت) ويسلّمه للمنعّم."""
+        self._smoother.set_target(
+            params_from_settings(self._snapshot, self._weather_overrides())
+        )
 
     def _refresh_target(self, *, snap: bool = False) -> None:
-        """يعيد بناء الهدف من الإعدادات الحالية؛ snap=True يقفز إليه دون تنعيم."""
-        self._smoother.set_target(
-            params_from_settings(self._store.snapshot(), self._weather_overrides())
-        )
+        """يجدّد النسخة المخبأة ويعيد بناء الهدف؛ snap=True يقفز إليه دون تنعيم."""
+        self._snapshot = self._store.snapshot()
+        self._apply_target()
         if snap:
             self._smoother.snap()
         self._target_dirty = False
@@ -227,21 +301,42 @@ class OverlayManager(QObject):
         self._target_dirty = True  # يُعاد بناء الهدف مرة واحدة في أول tick تالٍ
         if key in _RENDER_KEYS:
             self.refresh_options()
+        if key in _EFFECT_KEYS:
+            self._configure_effects()
 
     def _on_store_reloaded(self) -> None:
         """بعد load() أو استبدال كامل: نقفز للقيم الجديدة بدل تنعيمها من القديمة."""
         self._refresh_target(snap=True)
+        self._configure_effects()
 
     def _on_tick(self, dt: float) -> None:
         if self._target_dirty:
             self._refresh_target()
+        self._weather.step(dt)
+        if self._weather.enabled:
+            self._apply_target()  # قيم الطقس تتغير كل إطار (ينعّمها ParamSmoother)
+        self._lightning.step(dt)
         params = self._smoother.step(dt)
         period = max(params.gust_period_s, _MIN_GUST_PERIOD_S)
         self._gust_cycles += dt / period
         # t = cycles * T يعطي t / T = cycles، فيبقى الطور متصلًا حتى لو تغيّرت الدورة T.
         gust = gust_signal(self._gust_cycles * period, period, self._gust_phases)
+        flash = self._lightning.alpha
+        cost_ms = 0.0
         for window in self._windows:
             window.advance(dt, params, gust)
+            window.set_flash_alpha(flash)
+            cost_ms += window.last_advance_ms + window.last_paint_ms
+        # الكلفة = مجموع محاكاة ورسم كل الشاشات (تُنفَّذ كلها تباعًا على خيط الواجهة).
+        self._adaptive.record(self._clock.last_interval_ms, cost_ms)
+        scale, fps, interval = (
+            self._adaptive.scale,
+            self._adaptive.fps,
+            self._adaptive.interval_ema,
+        )
+        for window in self._windows:
+            window.set_adaptive_scale(scale)
+            window.set_hud_metrics(fps, interval)
         self.simulation_updated.emit(params, gust)
 
     # ------------------------------------------------------------------ الأحداث

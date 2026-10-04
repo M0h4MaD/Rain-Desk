@@ -34,8 +34,13 @@ from PySide6.QtWidgets import (
 
 from raindesk.config.store import SettingsStore
 from raindesk.i18n.translator import Translator
+from raindesk.ui.pages.about_page import AboutPage
+from raindesk.ui.pages.advanced_page import AdvancedPage
 from raindesk.ui.pages.base_page import BasePage
+from raindesk.ui.pages.display_page import DisplayPage
+from raindesk.ui.pages.effects_page import EffectsPage
 from raindesk.ui.pages.general_page import GeneralPage
+from raindesk.ui.pages.mascot_page import MascotPage
 from raindesk.ui.pages.rain_page import RainPage
 from raindesk.ui.theme import ThemeManager
 
@@ -72,6 +77,11 @@ class SettingsWindow(QMainWindow):
         self._pages: list[BasePage] = [
             GeneralPage(store, translator),
             RainPage(store, translator),
+            EffectsPage(store, translator),
+            MascotPage(store, translator),
+            DisplayPage(store, translator),
+            AdvancedPage(store, translator),
+            AboutPage(store, translator),
         ]
 
         self._sidebar = QListWidget()
@@ -97,7 +107,9 @@ class SettingsWindow(QMainWindow):
         self._reset_button.clicked.connect(self._confirm_reset)
 
         bar = QHBoxLayout()
-        bar.setContentsMargins(_BAR_MARGIN_PX, _BAR_MARGIN_PX, _BAR_MARGIN_PX, _BAR_MARGIN_PX)
+        bar.setContentsMargins(
+            _BAR_MARGIN_PX, _BAR_MARGIN_PX, _BAR_MARGIN_PX, _BAR_MARGIN_PX
+        )
         bar.setSpacing(_BAR_SPACING_PX)
         bar.addWidget(self._randomize_button)
         bar.addWidget(self._reset_button)
@@ -187,7 +199,9 @@ class SettingsWindow(QMainWindow):
         box.setIcon(QMessageBox.Icon.Question)
         box.setWindowTitle(tr("ui.reset_confirm.title"))
         box.setText(tr("ui.reset_confirm.body"))
-        confirm = box.addButton(tr("ui.confirm"), QMessageBox.ButtonRole.DestructiveRole)
+        confirm = box.addButton(
+            tr("ui.confirm"), QMessageBox.ButtonRole.DestructiveRole
+        )
         cancel = box.addButton(tr("ui.cancel"), QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(cancel)  # الافتراضي الأمان: الإلغاء
         box.exec()

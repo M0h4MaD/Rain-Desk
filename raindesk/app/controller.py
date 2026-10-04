@@ -5,9 +5,10 @@
     تغيّر الإعدادات إلى المترجم والسمة والمدير، والعشوائي والإعدادات المسبقة والخروج.
 الاعتماديات: كل طبقات الواجهة والإعدادات (الجذر app هو الوحيد المسموح له بذلك).
 النمط التصميمي: Mediator. كل طرف يعرف المتحكم فقط لا بعضه بعضًا.
-ملاحظات: المراقب (watcher) سيُربط في مرحلة تكامل النظام؛ الصوت وautostart في مراحلهما.
-    سرعة الإطارات (fps_cap) تتولاها bootstrap لأنها تملك FrameClock.
-مثال: controller = AppController(store, translator, theme, manager, None, tray, guard)
+ملاحظات: SystemWatcher يوقف المطر عند ملء الشاشة والجلسة المقفلة وموفّر البطارية، والتشغيل
+    التلقائي يُطابَق مع السجل عند البدء. الصوت يُربط في مرحلته. سرعة الإطارات (fps_cap) تتولاها
+    bootstrap لأنها تملك FrameClock.
+مثال: controller = AppController(store, translator, theme, manager, watcher, tray, guard)
 """
 
 from __future__ import annotations
@@ -24,6 +25,13 @@ from raindesk.config.store import SettingsStore
 from raindesk.core.logging_setup import configure_logging
 from raindesk.core.single_instance import SingleInstanceGuard
 from raindesk.i18n.translator import Translator
+from raindesk.platform_win import autostart
+from raindesk.platform_win.system_watcher import (
+    REASON_BATTERY,
+    REASON_FULLSCREEN,
+    REASON_SESSION,
+    SystemWatcher,
+)
 from raindesk.ui.overlay_manager import OverlayManager
 from raindesk.ui.settings_window import SettingsWindow
 from raindesk.ui.theme import ThemeManager
@@ -31,12 +39,24 @@ from raindesk.ui.tray import TrayController
 
 _LOG = logging.getLogger(__name__)
 
-_RANDOM_DECIMALS: Final[int] = 2  # منزلتان عشريتان للقيم العشوائية (تتطابق مع خطوة المنزلقات)
+_RANDOM_DECIMALS: Final[int] = (
+    2  # منزلتان عشريتان للقيم العشوائية (تتطابق مع خطوة المنزلقات)
+)
 # مفاتيح تُعيد بناء النوافذ، ومفاتيح تحدّث خيارات حية (الرسم يعالجه المدير بنفسه).
 _REBUILD_KEYS: Final[frozenset[str]] = frozenset(
     {"screens_mode", "selected_screens", "cover_taskbar"}
 )
-_OPTION_KEYS: Final[frozenset[str]] = frozenset({"topmost_watchdog", "exclude_from_capture"})
+_OPTION_KEYS: Final[frozenset[str]] = frozenset(
+    {"topmost_watchdog", "exclude_from_capture"}
+)
+_WATCHER_KEYS: Final[frozenset[str]] = frozenset(
+    {"pause_on_fullscreen", "pause_on_battery_saver"}
+)
+_WATCHER_REASONS: Final[tuple[str, ...]] = (
+    REASON_FULLSCREEN,
+    REASON_SESSION,
+    REASON_BATTERY,
+)
 
 
 class AppController(QObject):
@@ -48,7 +68,7 @@ class AppController(QObject):
         translator: Translator,
         theme: ThemeManager,
         manager: OverlayManager,
-        watcher: object | None,
+        watcher: SystemWatcher | None,
         tray: TrayController,
         guard: SingleInstanceGuard,
         parent: QObject | None = None,
@@ -58,7 +78,7 @@ class AppController(QObject):
         self._translator = translator
         self._theme = theme
         self._manager = manager
-        self._watcher = watcher  # يُربط لاحقًا (SystemWatcher)
+        self._watcher = watcher
         self._tray = tray
         self._guard = guard
         self._settings_window: SettingsWindow | None = None
@@ -82,6 +102,11 @@ class AppController(QObject):
         self._store.changed.connect(self._on_setting_changed)
         self._translator.language_changed.connect(self._on_language_changed)
         self._guard.activation_requested.connect(self.show_settings)
+        self._reconcile_autostart()
+        if self._watcher is not None:
+            self._watcher.reasons_changed.connect(self._on_watcher_reasons)
+            self._apply_watcher_options()
+            self._watcher.start()
 
         enabled = bool(self._store.get("enabled"))
         self._manager.set_pause_reason("user_disabled", not enabled)
@@ -92,8 +117,10 @@ class AppController(QObject):
             _LOG.warning("system tray is not available")
 
         first_run = not bool(self._store.get("first_run_completed"))
-        open_now = first_run or not self._tray_available or (
-            not minimized and not bool(self._store.get("start_hidden_in_tray"))
+        open_now = (
+            first_run
+            or not self._tray_available
+            or (not minimized and not bool(self._store.get("start_hidden_in_tray")))
         )
         if open_now:
             self.show_settings()
@@ -124,7 +151,8 @@ class AppController(QObject):
     def randomize(self) -> None:
         """يسحب قيمًا منتظمة لكل مفتاح في RANDOMIZE_RANGES ويكتبها دفعة واحدة (preset=custom).
 
-        ParamSmoother يتكفل بالانتقال الناعم إلى القيم الجديدة.
+        ParamSmoother يتكفل بالانتقال الناعم إلى القيم الجديدة (نحو ثانية). يوقف أيضًا الطقس
+        التلقائي لأن قيمه كانت ستتقدم على القيم العشوائية فلا يظهر لزر "عشوائي" أثر.
         """
         rng = np.random.default_rng()  # عشوائية المستخدم لا ترتبط ببذرة المحاكاة
         values: dict[str, object] = {
@@ -132,9 +160,15 @@ class AppController(QObject):
             for key, (low, high) in RANDOMIZE_RANGES.items()
         }
         values["preset"] = "custom"
+        values["auto_weather"] = (
+            False  # اختيار المستخدم اليدوي ينهي الطقس التلقائي (وإلا غلبه)
+        )
         self._store.update(values)
 
     def apply_preset(self, name: str) -> None:
+        """يطبّق إعدادًا مسبقًا؛ إن كان الطقس التلقائي مفعّلًا يُوقَف أولًا كي يظهر أثر الاختيار."""
+        if bool(self._store.get("auto_weather")):
+            self._store.set("auto_weather", False)
         self._store.apply_preset(name)
 
     def _reset(self) -> None:
@@ -147,13 +181,44 @@ class AppController(QObject):
         QApplication.quit()
 
     def shutdown(self) -> None:
-        """يحفظ هندسة النافذة ويخفي الأيقونة (كي لا تبقى شبحية)؛ آمن عند التكرار."""
+        """يوقف المراقبة ويحفظ هندسة النافذة ويخفي الأيقونة (كي لا تبقى شبحية)؛ آمن عند التكرار."""
         if self._shut_down:
             return
         self._shut_down = True
+        if self._watcher is not None:
+            self._watcher.stop()
         if self._settings_window is not None:
             self._settings_window.save_geometry()
         self._tray.hide()
+
+    # ------------------------------------------------------------------ النظام والتشغيل التلقائي
+    def _apply_watcher_options(self) -> None:
+        if self._watcher is not None:
+            self._watcher.set_options(
+                bool(self._store.get("pause_on_fullscreen")),
+                bool(self._store.get("pause_on_battery_saver")),
+            )
+
+    def _on_watcher_reasons(self, reasons: object) -> None:
+        """يحوّل مجموعة الأسباب الواردة من المراقب إلى أسباب إيقاف في المدير."""
+        active = reasons if isinstance(reasons, frozenset) else frozenset()
+        for reason in _WATCHER_REASONS:
+            self._manager.set_pause_reason(reason, reason in active)
+
+    def _reconcile_autostart(self) -> None:
+        """السجل هو مصدر الحقيقة: يطابق مفتاح launch_at_login مع وجود إدخال Run فعلًا."""
+        actual = autostart.is_enabled()
+        if actual != bool(self._store.get("launch_at_login")):
+            self._store.set("launch_at_login", actual)
+
+    def _apply_launch_at_login(self) -> None:
+        """يكتب إدخال التشغيل التلقائي أو يحذفه؛ عند الفشل يعود المفتاح إلى حالة السجل الفعلية."""
+        wanted = bool(self._store.get("launch_at_login"))
+        if wanted == autostart.is_enabled():
+            return
+        if not autostart.set_enabled(wanted):
+            _LOG.warning("could not change the startup entry; reverting the setting")
+            self._store.set("launch_at_login", autostart.is_enabled())
 
     # ------------------------------------------------------------------ التوجيه
     def _on_language_changed(self, _code: str) -> None:
@@ -175,4 +240,6 @@ class AppController(QObject):
         elif key in _OPTION_KEYS:
             self._manager.refresh_options()
         elif key == "launch_at_login":
-            _LOG.debug("launch_at_login saved; the registry entry is applied in stage M8")
+            self._apply_launch_at_login()
+        elif key in _WATCHER_KEYS:
+            self._apply_watcher_options()
