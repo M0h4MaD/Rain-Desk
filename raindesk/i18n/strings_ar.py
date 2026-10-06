@@ -258,4 +258,19 @@ STRINGS: Final[dict[str, str]] = {
         "لوحة المفاتيح ولا الفأرة ولا الميكروفون. تبقى الإعدادات والسجلات على هذا الجهاز."
     ),
     "privacy.registry": "التغيير الوحيد في النظام هو إدخال تشغيل اختياري لحسابك.",
+     # --- الصوت ---
+    "card.sound.title": "صوت المطر",
+    "card.sound.desc": "صوت مطر ناعم يولّده RainDesk لحظيًا دون أي ملفات صوتية.",
+    "setting.sound_enabled.label": "تشغيل صوت المطر",
+    "setting.sound_enabled.tip": (
+        "يشغّل صوت مطر مولَّدًا عبر جهاز الصوت الافتراضي. معطّل افتراضيًا."
+    ),
+    "setting.sound_volume.label": "مستوى الصوت",
+    "setting.sound_volume.tip": "علوّ صوت المطر. أبقِه منخفضًا ليبقى في الخلفية.",
+    "setting.sound_follows_intensity.label": "يتبع شدة المطر",
+    "setting.sound_follows_intensity.tip": "يعلو الصوت ويكثف كلما اشتد المطر.",
+    "setting.sound_wind.label": "صوت الرياح",
+    "setting.sound_wind.tip": "يضيف طبقة رياح ناعمة تتبع الرياح وهبّاتها.",
+    "note.sound_unavailable": "الصوت غير متاح: لم يُعثر على جهاز إخراج صوتي.",
+    "tray.sound": "صوت المطر",
 }

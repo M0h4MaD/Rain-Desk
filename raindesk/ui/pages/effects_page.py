@@ -1,10 +1,10 @@
 """raindesk/ui/pages/effects_page.py
 
-الغرض: صفحة المؤثرات: الرذاذ، وجداول الحواف، وتظليل الأجواء، والبرق، والطقس التلقائي.
+الغرض: صفحة المؤثرات: الرذاذ، وجداول الحواف، وتظليل الأجواء، والبرق، والطقس التلقائي، والصوت.
 المسؤوليات: أدوات مربوطة بالمخزن، وتعطيل التوابع عند إيقاف مفتاحها الرئيسي، وتحذير حساسية
-    الضوء للبرق، وتعطيل البرق إذا أوقف المستخدم رسوم Windows المتحركة.
+    الضوء للبرق، وتعطيل البرق إذا أوقف المستخدم رسوم Windows المتحركة، وبطاقة الصوت التي
+    تتعطل كلها مع ملاحظة إذا لم يتوفر جهاز إخراج صوتي (set_sound_available).
 الاعتماديات: raindesk.ui.pages.base_page وraindesk.platform_win.win32_api وأدوات الواجهة.
-ملاحظة: بطاقة الصوت تُضاف إلى هذه الصفحة في مرحلة الصوت (M8A).
 """
 
 from __future__ import annotations
@@ -34,11 +34,18 @@ class EffectsPage(BasePage):
         self._lightning_note = QLabel()
         self._lightning_note.setObjectName("Note")
         self._lightning_note.setWordWrap(True)
+        self._sound_available = True  # يُحدَّث من AppController عبر SettingsWindow
+        self._sound_note = QLabel()
+        self._sound_note.setObjectName("Note")
+        self._sound_note.setWordWrap(True)
+        self._sound_switch = self.make_switch("sound_enabled")
+        self._sound_dependents: list[QWidget] = []
         self._add_splashes()
         self._add_streams()
         self._add_mood()
         self._add_lightning()
         self._add_weather()
+        self._add_sound()
         self.retranslate()
 
     # ------------------------------------------------------------------ البطاقات
@@ -102,9 +109,37 @@ class EffectsPage(BasePage):
         self.link_enabled("auto_weather", variability)
         self.add_card(card)
 
+    def _add_sound(self) -> None:
+        card = SectionCard("card.sound.title", "card.sound.desc", self._translator)
+        card.add_row(self.make_row("setting.sound_enabled.label", self._sound_switch))
+        volume = self.make_slider("sound_volume")
+        follows = self.make_row(
+            "setting.sound_follows_intensity.label", self.make_switch("sound_follows_intensity")
+        )
+        wind = self.make_row("setting.sound_wind.label", self.make_switch("sound_wind"))
+        for widget in (volume, follows, wind):
+            card.add_row(widget)
+        card.add_row(self._sound_note)
+        self._sound_dependents = [volume, follows, wind]
+        self.watch_key("sound_enabled", lambda _value: self._refresh_sound_state())
+        self.add_card(card)
+
+    def set_sound_available(self, available: bool) -> None:
+        """يُبلَّغ بتوفر الصوت: غيابه يعطّل البطاقة كلها ويُظهر ملاحظة توضح السبب."""
+        self._sound_available = available
+        self._refresh_sound_state()
+
+    def _refresh_sound_state(self) -> None:
+        enabled = bool(self._store.get("sound_enabled"))
+        self._sound_switch.setEnabled(self._sound_available)
+        for widget in self._sound_dependents:
+            widget.setEnabled(self._sound_available and enabled)
+        self._sound_note.setVisible(not self._sound_available)
+
     # ------------------------------------------------------------------ الترجمة
     def retranslate(self) -> None:
         super().retranslate()
+        self._sound_note.setText(self._translator.tr("note.sound_unavailable"))
         text = self._translator.tr("note.lightning_warning")
         if not self._animations_ok:
             text += "\n" + self._translator.tr("note.lightning_animations_off")

@@ -273,4 +273,23 @@ STRINGS: Final[dict[str, str]] = {
     "privacy.registry": (
         "The only system change is an optional startup entry for your user account."
     ),
+    # --- الصوت ---
+    "card.sound.title": "Rain sound",
+    "card.sound.desc": "A soft rain sound generated live by RainDesk. No audio files are used.",
+    "setting.sound_enabled.label": "Play rain sound",
+    "setting.sound_enabled.tip": (
+        "Plays a generated rain sound on your default audio device. Off by default."
+    ),
+    "setting.sound_volume.label": "Volume",
+    "setting.sound_volume.tip": (
+        "Loudness of the rain sound. Keep it low so it stays in the background."
+    ),
+    "setting.sound_follows_intensity.label": "Follow rain intensity",
+    "setting.sound_follows_intensity.tip": (
+        "The sound gets louder and denser as the rain gets heavier."
+    ),
+    "setting.sound_wind.label": "Wind sound",
+    "setting.sound_wind.tip": "Adds a soft wind layer that follows the wind and its gusts.",
+    "note.sound_unavailable": "Sound is unavailable: no audio output device was found.",
+    "tray.sound": "Rain sound",
 }

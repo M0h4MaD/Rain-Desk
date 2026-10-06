@@ -74,10 +74,11 @@ class SettingsWindow(QMainWindow):
         self._quit_on_close = False
 
         self.setMinimumSize(*_MIN_SIZE)
+        self._effects_page = EffectsPage(store, translator)
         self._pages: list[BasePage] = [
             GeneralPage(store, translator),
             RainPage(store, translator),
-            EffectsPage(store, translator),
+            self._effects_page,
             MascotPage(store, translator),
             DisplayPage(store, translator),
             AdvancedPage(store, translator),
@@ -166,6 +167,10 @@ class SettingsWindow(QMainWindow):
         """عند غياب شريط النظام يجب أن يُنهي إغلاق النافذة التطبيق، وإلا ضاع الوصول إليه."""
         self._quit_on_close = quit_on_close
 
+    def set_sound_available(self, available: bool) -> None:
+        """يمرّر توفّر الصوت إلى صفحة المؤثرات (تعطّل بطاقة الصوت عند الغياب)."""
+        self._effects_page.set_sound_available(available)
+        
     def show_notice(self, text: str) -> None:
         """يعرض رسالة قصيرة في شريط الحالة."""
         self._status.setText(text)

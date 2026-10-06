@@ -87,6 +87,8 @@ class OverlayManager(QObject):
         object, float
     )  # (EngineParams المنعّمة، العصف) بعد كل tick
 
+    paused_changed = Signal(bool)
+
     def __init__(
         self, store: SettingsStore, clock: FrameClock, parent: QObject | None = None
     ) -> None:
@@ -161,11 +163,11 @@ class OverlayManager(QObject):
             self._reasons.discard(reason)
         if self.paused != was_paused:
             _LOG.info(
-                "overlay %s (reasons: %s)",
-                "paused" if self.paused else "resumed",
+                "overlay %s (reasons: %s)", "paused" if self.paused else "resumed",
                 sorted(self._reasons),
             )
             self._sync_run_state()
+            self.paused_changed.emit(self.paused)
 
     # ------------------------------------------------------------------ البناء
     def _derive_seed(self) -> int:

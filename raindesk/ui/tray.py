@@ -1,11 +1,12 @@
 """raindesk/ui/tray.py
 
-الغرض: أيقونة شريط النظام وقائمتها (فتح الإعدادات، تشغيل/إيقاف، عشوائي، إعدادات مسبقة، خروج).
+الغرض: أيقونة شريط النظام وقائمتها (فتح الإعدادات، تشغيل/إيقاف، صوت المطر، عشوائي، إعدادات مسبقة،
+    خروج).
 المسؤوليات: رسم الأيقونة برمجيًا (بلا ملفات صور)، وبناء القائمة، وإصدار إشارات الطلبات
     إلى AppController، وتحديث النصوص عند تغيّر اللغة، وإظهار إشعارات النظام.
 الاعتماديات: PySide6 وraindesk.config.schema (أسماء الإعدادات المسبقة) وraindesk.i18n.translator.
 النمط التصميمي: Adapter فوق QSystemTrayIcon، وObserver عبر الإشارات (لا يعرف المتحكم).
-ملاحظات: النقر الأيسر يفتح الإعدادات. تُضاف عناصر الصوت في مرحلة الصوت.
+ملاحظات: النقر الأيسر يفتح الإعدادات. عنصر الصوت يُعطَّل حين يغيب جهاز الإخراج الصوتي.
 مثال: tray = TrayController(translator); tray.show(); tray.notify('RainDesk', 'Hello')
 """
 
@@ -37,7 +38,9 @@ def _make_icon(fill: str) -> QIcon:
     path = QPainterPath()
     path.moveTo(32.0, 5.0)  # رأس القطرة
     path.cubicTo(32.0, 5.0, 52.0, 29.0, 52.0, 42.0)  # الجانب الأيمن نحو نقطة القوس
-    path.arcTo(QRectF(12.0, 22.0, 40.0, 40.0), 0.0, -180.0)  # النصف السفلي (مع عقارب الساعة)
+    path.arcTo(
+        QRectF(12.0, 22.0, 40.0, 40.0), 0.0, -180.0
+    )  # النصف السفلي (مع عقارب الساعة)
     path.cubicTo(12.0, 29.0, 32.0, 5.0, 32.0, 5.0)  # الجانب الأيسر عودة إلى الرأس
     path.closeSubpath()
     painter.setPen(Qt.PenStyle.NoPen)
@@ -54,6 +57,7 @@ class TrayController(QObject):
 
     open_settings_requested = Signal()
     toggle_enabled_requested = Signal()
+    toggle_sound_requested = Signal()
     randomize_requested = Signal()
     preset_requested = Signal(str)
     quit_requested = Signal()
@@ -71,10 +75,14 @@ class TrayController(QObject):
         self._action_open = QAction(self._menu)
         bold = QFont(self._action_open.font())
         bold.setBold(True)
-        self._action_open.setFont(bold)  # الإجراء الافتراضي بخط عريض كأغلب تطبيقات الشريط
+        self._action_open.setFont(
+            bold
+        )  # الإجراء الافتراضي بخط عريض كأغلب تطبيقات الشريط
         self._action_enable = QAction(self._menu)
         self._action_enable.setCheckable(True)
         self._action_enable.setChecked(True)
+        self._action_sound = QAction(self._menu)
+        self._action_sound.setCheckable(True)
         self._action_randomize = QAction(self._menu)
         self._presets_menu = QMenu(self._menu)
         self._preset_actions: dict[str, QAction] = {}
@@ -87,6 +95,7 @@ class TrayController(QObject):
 
         self._menu.addAction(self._action_open)
         self._menu.addAction(self._action_enable)
+        self._menu.addAction(self._action_sound)
         self._menu.addAction(self._action_randomize)
         self._menu.addMenu(self._presets_menu)
         self._menu.addSeparator()
@@ -94,6 +103,7 @@ class TrayController(QObject):
 
         self._action_open.triggered.connect(self.open_settings_requested)
         self._action_enable.triggered.connect(self.toggle_enabled_requested)
+        self._action_sound.triggered.connect(self.toggle_sound_requested)
         self._action_randomize.triggered.connect(self.randomize_requested)
         self._action_quit.triggered.connect(self.quit_requested)
         self._tray.setContextMenu(self._menu)
@@ -123,6 +133,14 @@ class TrayController(QObject):
         self._tray.setIcon(self._icon_on if enabled else self._icon_off)
         self._update_tooltip()
 
+    def set_sound_state(self, enabled: bool) -> None:
+        """يزامن علامة "صوت المطر" مع الإعداد (setChecked لا يصدر triggered)."""
+        self._action_sound.setChecked(enabled)
+
+    def set_sound_available(self, available: bool) -> None:
+        """يعطّل عنصر الصوت حين لا يتوفر جهاز إخراج أو يفشل تشغيل الصوت."""
+        self._action_sound.setEnabled(available)
+
     def notify(self, title: str, message: str) -> None:
         """إشعار من شريط النظام إن كان مدعومًا."""
         if QSystemTrayIcon.supportsMessages():
@@ -134,6 +152,7 @@ class TrayController(QObject):
         tr = self._translator.tr
         self._action_open.setText(tr("tray.open_settings"))
         self._action_enable.setText(tr("tray.enable"))
+        self._action_sound.setText(tr("tray.sound"))
         self._action_randomize.setText(tr("tray.randomize"))
         self._presets_menu.setTitle(tr("tray.presets"))
         for code, action in self._preset_actions.items():

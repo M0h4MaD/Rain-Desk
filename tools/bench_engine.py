@@ -2,9 +2,9 @@
 
 الغرض: قياس أداء المحرك والرسم ومقارنته بميزانية الأداء (performance_budget).
 المسؤوليات: وسيط ووصول p95 وp99 لكل من RainField.step وlayer_lines ورسم paint_rain على
-    لوحة 1080p، لأعداد قطرات مختلفة، ومقارنة نهجي تقسيم الطبقات (argsort مقابل الأقنعة).
+    لوحة 1080p، لأعداد قطرات مختلفة، ومقارنة نهجي تقسيم الطبقات (argsort مقابل الأقنعة)،
+    وقياس مولّد الصوت RainSynth (زمن البناء الأول وزمن كتلة 20 ms).
 المخرجات: جدول Markdown في الطرفية وملف bench_results.csv في مجلد التشغيل.
-ملاحظة: نسخة M4؛ يُضاف قياس RainSynth (الصوت) عند تسليم مرحلة الصوت.
 الاستعمال: python tools/bench_engine.py
 """
 
@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from raindesk.config.schema import default_settings  # noqa: E402
 from raindesk.engine.params import params_from_settings  # noqa: E402
+from raindesk.engine.rain_audio import AudioParams, RainSynth  # noqa: E402
 from raindesk.engine.rain_field import RainField  # noqa: E402
 
 _COUNTS: Final[tuple[int, ...]] = (500, 1000, 2000, 5000)
@@ -41,6 +42,10 @@ _CSV_PATH: Final[Path] = Path("bench_results.csv")
 _BUDGET_STEP_1000_MS: Final[float] = 1.0
 _BUDGET_STEP_5000_MS: Final[float] = 3.0
 _BUDGET_PAINT_1000_MS: Final[float] = 6.0
+_BUDGET_SYNTH_BLOCK_MS: Final[float] = 0.5  # كتلة صوت 20 ms
+_BUDGET_SYNTH_BUILD_MS: Final[float] = 400.0  # أول تفعيل للصوت
+_SYNTH_BLOCK_FRAMES: Final[int] = 882  # 20 ms عند 44.1 kHz
+_SYNTH_BLOCKS: Final[int] = 1000
 
 
 def _stats(samples_ns: list[int]) -> tuple[float, float, float]:
@@ -126,6 +131,20 @@ def _bench_partition(count: int) -> tuple[float, float]:
     return results[0], results[1]
 
 
+def _bench_synth() -> tuple[float, float]:
+    """يعيد (زمن بناء RainSynth بالميلي ثانية، وسيط زمن كتلة 20 ms عند أقصى شدة)."""
+    started = time.perf_counter_ns()
+    synth = RainSynth(np.random.default_rng(_SEED))
+    build_ms = (time.perf_counter_ns() - started) / _NS_PER_MS
+    params = AudioParams(1.0, 0.5, 0.3, 0.8, True)
+    samples: list[int] = []
+    for _ in range(_WARMUP_FRAMES + _SYNTH_BLOCKS):
+        block_started = time.perf_counter_ns()
+        synth.render(_SYNTH_BLOCK_FRAMES, params)
+        samples.append(time.perf_counter_ns() - block_started)
+    return build_ms, _stats(samples[_WARMUP_FRAMES:])[0]
+
+
 def _fmt(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.3f}"
 
@@ -163,11 +182,15 @@ def main() -> int:
         argsort_us, masks_us = _bench_partition(count)
         print(f"| {count} | {argsort_us:.1f} | {masks_us:.1f} |")
 
+    build_ms, block_ms = _bench_synth()
+    print(f"\nRainSynth: build {build_ms:.0f} ms, 20 ms block median {block_ms:.3f} ms")
     by_count = {int(r["drops"]): r for r in rows}  # type: ignore[call-overload]
     checks = [
         ("step @1000 <= 1.0 ms", by_count[1000]["step_median_ms"], _BUDGET_STEP_1000_MS),
         ("step @5000 <= 3.0 ms", by_count[5000]["step_median_ms"], _BUDGET_STEP_5000_MS),
         ("paint @1000 <= 6.0 ms", by_count[1000]["paint_median_ms"], _BUDGET_PAINT_1000_MS),
+        ("synth block <= 0.5 ms", block_ms, _BUDGET_SYNTH_BLOCK_MS),
+        ("synth build <= 400 ms", build_ms, _BUDGET_SYNTH_BUILD_MS),
     ]
     print("\nBudget check (median):")
     failed = False
