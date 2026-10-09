@@ -1,9 +1,9 @@
 """raindesk/app/bootstrap.py
 
 الغرض: Composition Root: يبني الكائنات ويربطها ويشغّل حلقة الأحداث ويعيد رمز الخروج.
-المسؤوليات (نسخة M8): سطر الأوامر، والسجلات، وQApplication، والنسخة الواحدة، والإعدادات،
+المسؤوليات (نسخة M9): سطر الأوامر، والسجلات، وQApplication، والنسخة الواحدة، والإعدادات،
     والترجمة واتجاه الواجهة، والسمة، وFrameClock وOverlayManager، وأيقونة الشريط، ومراقب النظام،
-    وAppController، وسرعة الإطارات، وترتيب الإنهاء.
+    وAppController، وسرعة الإطارات، وترتيب الإنهاء، وافتراضيات أول تشغيل (الشخصية).
 الاعتماديات: كل الطبقات (الجذر الوحيد المسموح له بذلك).
 النمط التصميمي: Composition Root (تجميع الاعتماديات في مكان واحد).
 ملاحظات: أعلام سطر الأوامر: --minimized و--selftest و--selftest-seconds N.
@@ -30,6 +30,7 @@ from raindesk.core.constants import APP_NAME, APP_VERSION
 from raindesk.core.logging_setup import configure_logging, install_excepthook
 from raindesk.core.single_instance import SingleInstanceGuard
 from raindesk.i18n.translator import Translator
+from raindesk.platform_win import win32_api
 from raindesk.platform_win.system_watcher import SystemWatcher
 from raindesk.ui.frame_clock import FrameClock
 from raindesk.ui.overlay_manager import OverlayManager
@@ -102,6 +103,18 @@ def _apply_layout_direction(app: QApplication, translator: Translator) -> None:
     )
 
 
+def _apply_first_run_defaults(store: SettingsStore) -> None:
+    """أول تشغيل فقط: تُعطَّل الشخصية إن كان المستخدم قد عطّل رسوم Windows المتحركة.
+
+    من عطّل الرسوم المتحركة في النظام يفضّل غالبًا واجهة هادئة (حساسية للحركة)، فلا نفاجئه
+    بشخصية متحركة. يستطيع تفعيلها لاحقًا من صفحة الشخصية.
+    """
+    if bool(store.get("first_run_completed")):
+        return
+    if not win32_api.client_animations_enabled():
+        store.set("mascot_enabled", False)
+
+
 def _install_interrupt_handler(app: QApplication) -> None:
     """يجعل Ctrl+C يغلق التطبيق بأمان (فيُحفظ كل شيء) بدل قتل العملية.
 
@@ -145,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     store = SettingsStore(parent=app)
     store.load()
     configure_logging(str(store.get("log_level")))  # إعادة الضبط بمستوى المستخدم
+    _apply_first_run_defaults(store)  # قبل بناء المدير كي يقرأ القيمة النهائية
     if store.last_corrupt_backup is not None:
         _LOG.warning("settings were damaged; backup: %s", store.last_corrupt_backup)
 

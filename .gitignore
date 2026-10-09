@@ -1,0 +1,32 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- أدوات الجودة ---
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- PyInstaller (المخرجات تُبنى من raindesk.spec ولا تُرفع) ---
+build/
+dist/
+
+# --- ملفات التشغيل والقياس المولّدة محليًا ---
+*.log
+/bench_results.csv
+/endurance_*.csv
+settings.corrupt-*.json
+
+# --- المحرر والنظام ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+Thumbs.db
+desktop.ini
+
+# --- ملاحظة: نُبقي requirements.lock.txt و assets/raindesk.ico في المستودع عمدًا ---

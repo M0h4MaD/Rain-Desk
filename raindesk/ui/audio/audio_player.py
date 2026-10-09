@@ -107,6 +107,15 @@ class RainAudioPlayer(QObject):
         self._gust = gust
         self._wind_enabled = wind_enabled
 
+    def trigger_thunder(self, flash_peak: float) -> None:
+        """يجدول رعدًا بعد وميض برق بشدة flash_peak؛ لا شيء إن لم يكن الصوت قيد التشغيل الفعلي.
+
+        أول رعد يبني صيغ الرعد (نحو 0.1 s مرة واحدة)، وبعده لا كلفة تُذكر.
+        """
+        if self._synth is None or self._sink is None or self._target <= 0.0:
+            return
+        self._synth.trigger_thunder(flash_peak)
+        
     def shutdown(self) -> None:
         """يوقف المؤقّتات ويحرّر الجهاز فورًا (عند إغلاق التطبيق)."""
         self._timer.stop()

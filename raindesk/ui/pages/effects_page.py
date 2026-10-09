@@ -117,10 +117,11 @@ class EffectsPage(BasePage):
             "setting.sound_follows_intensity.label", self.make_switch("sound_follows_intensity")
         )
         wind = self.make_row("setting.sound_wind.label", self.make_switch("sound_wind"))
-        for widget in (volume, follows, wind):
+        thunder = self.make_row("setting.sound_thunder.label", self.make_switch("sound_thunder"))
+        for widget in (volume, follows, wind, thunder):
             card.add_row(widget)
         card.add_row(self._sound_note)
-        self._sound_dependents = [volume, follows, wind]
+        self._sound_dependents = [volume, follows, wind, thunder]
         self.watch_key("sound_enabled", lambda _value: self._refresh_sound_state())
         self.add_card(card)
 

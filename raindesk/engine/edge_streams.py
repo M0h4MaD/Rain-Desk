@@ -130,7 +130,10 @@ class EdgeStreams:
     def _x_at(self, y: np.ndarray) -> np.ndarray:
         """x(y, t) = x_i + A_i sin(k_i y + w_i t + phi_i) + 6 G، لكل جدول (الصف) ولكل y في صفه."""
         phase = self._wave_k[:, None] * y + (self._wave_w * self._time + self._phase)[:, None]
-        return self._base_x[:, None] + self._amp[:, None] * np.sin(phase) + self._shift
+        result: np.ndarray = (
+            self._base_x[:, None] + self._amp[:, None] * np.sin(phase) + self._shift
+        )
+        return result
 
     def step(self, dt: float, gust: float) -> None:
         """يقدّم الزمن والموجات والحبّات؛ gust في [-1, 1] يزيح المسارات بـ 6 px * gust."""

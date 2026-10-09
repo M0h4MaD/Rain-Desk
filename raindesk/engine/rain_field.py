@@ -143,7 +143,7 @@ class RainField:
         level = clamp(intensity, 0.0, 1.0)
         density = DROPS_PER_MEGAPIXEL_MIN + (
             DROPS_PER_MEGAPIXEL_MAX - DROPS_PER_MEGAPIXEL_MIN
-        ) * level**INTENSITY_CURVE_EXPONENT
+        ) * math.pow(level, INTENSITY_CURVE_EXPONENT)  # pow يعيد float (عوض Any من **)
         margin = SPAWN_MARGIN_TOP_FRACTION * height
         angle = clamp(wind_angle_deg, -MAX_WIND_ANGLE_DEG, MAX_WIND_ANGLE_DEG)
         slant = (height + margin) * abs(math.tan(math.radians(angle)))  # الإزاحة الأفقية للمسار
@@ -164,8 +164,8 @@ class RainField:
     def set_ground(self, bottom_y: float, mode: str) -> None:
         """يحدد خط الهبوط: 'bottom_edge' عند bottom_y، أو 'depth_plane' بين 60% منه وbottom_y."""
         self._ground_bottom = max(float(bottom_y), _MIN_SIZE_PX)
-        self._ground_mode = mode if mode in (GROUND_BOTTOM_EDGE, GROUND_DEPTH_PLANE) else (
-            GROUND_BOTTOM_EDGE
+        self._ground_mode = (
+            mode if mode in (GROUND_BOTTOM_EDGE, GROUND_DEPTH_PLANE) else (GROUND_BOTTOM_EDGE)
         )
 
     # ------------------------------------------------------------------ الوضع الابتدائي والولادة

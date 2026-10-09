@@ -86,7 +86,7 @@ class SingleInstanceGuard(QObject):
                 self._on_ready_read(socket)
 
     def _on_ready_read(self, socket: QLocalSocket) -> None:
-        data = bytes(socket.read(_MAX_MESSAGE_BYTES)).strip()
+        data = bytes(socket.read(_MAX_MESSAGE_BYTES).data()).strip()  # QByteArray -> bytes
         if data == _MSG_SHOW_SETTINGS:
             self.activation_requested.emit()
         else:

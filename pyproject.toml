@@ -1,0 +1,31 @@
+# pyproject.toml: إعدادات أدوات الجودة لمشروع RainDesk (ruff وmypy وpytest).
+# المشروع تطبيق سطح مكتب لا مكتبة، فلا يوجد قسم [project] ولا [build-system]؛ التثبيت عبر
+# requirements.txt. الأوامر الكاملة موثقة في docs/quality_assurance.md.
+
+[tool.ruff]
+line-length = 100  # الحد الأقصى لطول السطر (PEP 8 كما تشترط المواصفة)
+target-version = "py312"
+
+[tool.ruff.lint]
+# مجموعة صريحة بدل "الافتراضية" لأن القواعد الافتراضية تتغير بين إصدارات ruff:
+#   E4/E7/E9 وF = المجموعة الافتراضية التاريخية (أخطاء الاستيراد والصياغة والأسماء غير المعرّفة)
+#   I = ترتيب الاستيراد، B = أخطاء شائعة (bugbear)، UP = ترقية الصياغة إلى بايثون 3.12
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["raindesk"]
+
+[tool.ruff.format]
+quote-style = "double"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true  # يُطبَّق على raindesk/engine وraindesk/config وraindesk/core (انظر الأمر أدناه)
+warn_unused_configs = true
+# mypy --strict raindesk/engine raindesk/config raindesk/core
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["windows_only: يتطلب Windows (winreg أو Win32)؛ يُتخطى على غيره"]

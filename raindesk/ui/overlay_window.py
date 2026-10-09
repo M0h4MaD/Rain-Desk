@@ -3,13 +3,15 @@
 الغرض: نافذة شفافة بلا إطار تغطي شاشة واحدة، ترسم المطر ومؤثراته، وتمرّر النقرات، ولا تظهر
     في شريط المهام.
 المسؤوليات: أعلام النافذة، والهندسة حسب cover_taskbar، والتثبيت فوق الأخرى، وحقل المطر
-    (RainField) والرذاذ (SplashSystem) وجداول الحواف (EdgeStreams)، وترتيب الرسم: تظليل
-    الأجواء ثم الجداول ثم المطر ثم الرذاذ ثم وميض البرق ثم لوحة التشخيص.
+    (RainField) والرذاذ (SplashSystem) وجداول الحواف (EdgeStreams)، واستضافة الشخصية Drip
+    (مسرحها أسفل منطقة العمل)، وترتيب الرسم: تظليل الأجواء ثم الجداول ثم المطر ثم الرذاذ ثم
+    الشخصية ثم وميض البرق ثم لوحة التشخيص.
 الاعتماديات: PySide6 وraindesk.config وraindesk.engine وraindesk.platform_win وui.painters.
 النمط التصميمي: Template Method (paintEvent) مع Adapter فوق أعلام Qt وواجهات Win32.
 ملاحظات: الأعلام تُضبط في __init__ قبل أول show()؛ تغييرها لاحقًا يعيد إنشاء النافذة الأصلية.
-    تُضاف الشخصية في مرحلة لاحقة (set_mascot أيضًا). وميض البرق يأتي من OverlayManager
-    (حدث واحد مشترك بين الشاشات) عبر set_flash_alpha.
+    الشخصية كائن واحد يملكه OverlayManager ويمرّره (set_mascot) إلى نافذة المضيف فقط؛ لا
+    تُرسم ولا تكلّف شيئًا إن لم تُمرَّر. وميض البرق يأتي من OverlayManager (حدث واحد مشترك
+    بين الشاشات) عبر set_flash_alpha.
 مثال: window = OverlayWindow(screen, store, rng); window.show(); window.advance(dt, params, gust)
 """
 
@@ -35,6 +37,7 @@ from raindesk.config.schema import QUALITY_PROFILES
 from raindesk.config.store import SettingsStore
 from raindesk.core.constants import APP_NAME
 from raindesk.engine.edge_streams import EdgeStreams
+from raindesk.engine.mascot import Mascot
 from raindesk.engine.math_utils import clamp
 from raindesk.engine.params import EngineParams
 from raindesk.engine.rain_field import GROUND_BOTTOM_EDGE, RainField
@@ -48,6 +51,7 @@ from raindesk.ui.painters.effects_painter import (
     paint_splashes,
 )
 from raindesk.ui.painters.hud_painter import paint_hud
+from raindesk.ui.painters.mascot_painter import paint_mascot
 from raindesk.ui.painters.rain_painter import paint_rain
 
 _MS_PER_SECOND: Final[float] = 1000.0
@@ -107,6 +111,9 @@ class OverlayWindow(QWidget):
         self._hud_fps = 0.0
         self._hud_interval_ms = 0.0
         self._last_advance_ms = 0.0
+        self._mascot: Mascot | None = (
+            None  # يملكه OverlayManager؛ نافذة المضيف فقط تحمله
+        )
 
         # --- أعلام النافذة (تُضبط قبل أول show) ---
         # WindowTransparentForInput: click-through على مستوى النظام؛ Qt يطبّق النمط الموسّع
@@ -186,6 +193,7 @@ class OverlayWindow(QWidget):
         rect = self._target_rect()
         if rect != self.geometry():
             self.setGeometry(rect)
+        self._sync_stage()  # أسفل منطقة العمل قد يتغير دون تغيّر النافذة (cover_taskbar)
 
     def _on_screen_geometry_changed(self, _rect: QRect) -> None:
         if not self._closed:
@@ -194,6 +202,27 @@ class OverlayWindow(QWidget):
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._sync_field_size()
+        self._sync_stage()
+
+    def _stage_ground_y(self) -> float:
+        """أسفل منطقة العمل بإحداثيات النافذة: الشخصية تقف فوق شريط المهام لا خلفه."""
+        rect = self._target_rect()
+        available = self._qscreen.availableGeometry()
+        ground = available.y() + available.height() - rect.y()
+        return clamp(float(ground), 0.0, float(rect.height()))
+
+    def _sync_stage(self) -> None:
+        """يحدّث مسرح الشخصية (إن وُجدت): الحدّان الأفقيان وخط الأرض."""
+        if self._mascot is not None:
+            self._mascot.set_stage(
+                0.0, float(self._target_rect().width()), self._stage_ground_y()
+            )
+
+    def set_mascot(self, mascot: Mascot | None) -> None:
+        """يمرّر الشخصية إلى هذه النافذة (المضيف) أو يسحبها (None)؛ لا ملكية هنا."""
+        self._mascot = mascot
+        self._sync_stage()
+        self.update()
 
     def _sync_field_size(self) -> None:
         """يوفّق المحاكيات مع حجم النافذة (بالبكسل المنطقي)؛ لا شيء إن لم يتغيّر."""
@@ -320,6 +349,8 @@ class OverlayWindow(QWidget):
                 paint_edge_streams(painter, self._streams, self._params, height)
                 paint_rain(painter, self._field, self._params)
                 paint_splashes(painter, self._splashes, self._params)
+            if self._mascot is not None and self._mascot.visible:
+                paint_mascot(painter, self._mascot, self._mascot.height_px)
             paint_lightning(painter, width, height, self._flash_alpha)
             if self._hud_enabled:
                 paint_hud(painter, self._hud_lines())
@@ -333,6 +364,7 @@ class OverlayWindow(QWidget):
         if self._closed:
             return
         self._closed = True
+        self._mascot = None
         for signal in (
             self._qscreen.geometryChanged,
             self._qscreen.availableGeometryChanged,

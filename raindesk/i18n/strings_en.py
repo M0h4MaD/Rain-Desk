@@ -17,13 +17,11 @@ STRINGS: Final[dict[str, str]] = {
     "window.title": "RainDesk Settings",
     # --- رسائل ---
     "msg.settings_corrupt": (
-        "The settings file was damaged, so defaults were loaded. "
-        "A backup was saved as {name}."
+        "The settings file was damaged, so defaults were loaded. A backup was saved as {name}."
     ),
     "msg.first_run_title": "Welcome to RainDesk",
     "msg.first_run_body": (
-        "RainDesk keeps running in the system tray. Click its icon to open the "
-        "settings."
+        "RainDesk keeps running in the system tray. Click its icon to open the settings."
     ),
     "msg.tray_unavailable": (
         "The system tray is not available, so closing this window will quit RainDesk."
@@ -83,8 +81,7 @@ STRINGS: Final[dict[str, str]] = {
     "card.preset.desc": "Start from a ready-made weather, then fine-tune it below.",
     "setting.preset.label": "Weather preset",
     "setting.preset.tip": (
-        "Choosing a preset sets the main rain and wind values. Moving a slider makes "
-        "it Custom."
+        "Choosing a preset sets the main rain and wind values. Moving a slider makes it Custom."
     ),
     "note.auto_weather": "Automatic weather is on, so these controls are managed for you.",
     "card.drops.title": "Drops",
@@ -290,6 +287,11 @@ STRINGS: Final[dict[str, str]] = {
     ),
     "setting.sound_wind.label": "Wind sound",
     "setting.sound_wind.tip": "Adds a soft wind layer that follows the wind and its gusts.",
+    "setting.sound_thunder.label": "Thunder",
+    "setting.sound_thunder.tip": (
+        "Plays thunder after each lightning flash: the closer the flash, the sooner and "
+        "louder the thunder. Needs lightning and sound to be on."
+    ),
     "note.sound_unavailable": "Sound is unavailable: no audio output device was found.",
     "tray.sound": "Rain sound",
 }

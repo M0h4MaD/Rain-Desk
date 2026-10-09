@@ -161,3 +161,83 @@ def test_reset_clears_tail_and_ramps() -> None:
     synth.reset()
     block = synth.render(_BLOCK, _params(0.0, 0.0, 0.0, master=0.0))
     assert float(np.abs(block).max()) < _SILENCE
+
+    # --------------------------------------------------------------------------- الرعد
+_THUNDER_MIN_DELAY_S = 0.4
+_THUNDER_MAX_DELAY_S = 6.0
+_THUNDER_LENGTH_S = 5.0
+_BRIGHT_FLASH = 0.30
+_DIM_FLASH = 0.12
+
+
+def _thunder_only(seed: int, peaks: list[float], seconds: float = 12.0) -> np.ndarray:
+    """مخرج الرعد وحده: الفرق بين مولّدين متطابقين أُطلق على أحدهما رعد (بلا مطر ولا رياح)."""
+    params = _params(0.0, 0.0, 0.0, wind_enabled=False)
+    plain, thunder = _synth(seed), _synth(seed)
+    for peak in peaks:
+        thunder.trigger_thunder(peak)
+    frames = round(seconds * _RATE)
+    return thunder.render(frames, params) - plain.render(frames, params)
+
+
+def test_thunder_is_silent_before_the_earliest_delay_then_audible_then_ends() -> None:
+    diff = _thunder_only(4, [_BRIGHT_FLASH])
+    earliest = round(_THUNDER_MIN_DELAY_S * _RATE)
+    latest_end = round((_THUNDER_MAX_DELAY_S + _THUNDER_LENGTH_S + 0.1) * _RATE)
+    assert float(np.abs(diff[: earliest - 1]).max()) == 0.0  # لا صوت قبل أقصر تأخير ممكن
+    assert float(np.abs(diff).max()) > 0.02  # ثم رعد مسموع
+    assert float(np.abs(diff[latest_end:]).max()) == 0.0  # وينتهي كله قبل 11.1 ثانية
+
+
+def test_closer_flash_gives_louder_thunder() -> None:
+    close = _thunder_only(6, [_BRIGHT_FLASH])
+    far = _thunder_only(6, [_DIM_FLASH])
+    assert float(np.sqrt(np.mean(close**2))) > 1.5 * float(np.sqrt(np.mean(far**2)))
+
+
+def test_thunder_delay_follows_the_documented_range() -> None:
+    assert RainSynth.thunder_delay_s(0.0) == _THUNDER_MIN_DELAY_S
+    assert RainSynth.thunder_delay_s(1.0) == _THUNDER_MAX_DELAY_S
+    assert RainSynth.thunder_delay_s(-5.0) == _THUNDER_MIN_DELAY_S  # خارج المجال يُقصّ
+    assert RainSynth.thunder_delay_s(9.0) == _THUNDER_MAX_DELAY_S
+
+
+def test_simultaneous_thunders_are_capped_at_four() -> None:
+    synth = _synth()
+    for _ in range(10):
+        synth.trigger_thunder(0.2)
+    assert synth.thunder_voice_count == 4
+
+
+def test_thunder_is_deterministic_for_the_same_seed() -> None:
+    first = _thunder_only(8, [0.25, 0.15])
+    second = _thunder_only(8, [0.25, 0.15])
+    np.testing.assert_array_equal(first, second)
+
+
+def test_output_stays_bounded_with_four_thunders_over_heavy_rain() -> None:
+    synth = _synth()
+    for _ in range(4):
+        synth.trigger_thunder(_BRIGHT_FLASH)
+    block = synth.render(12 * _RATE, _params(1.0, 1.0, 1.0, 1.0))
+    assert float(np.abs(block).max()) <= _MAX_OUTPUT
+
+
+def test_thunder_does_not_depend_on_the_block_size() -> None:
+    params = _params(0.0, 0.0, 0.0, wind_enabled=False)
+    frames = 12 * _RATE
+    single = _synth(9)
+    single.trigger_thunder(0.2)
+    reference = single.render(frames, params)
+    chunked = _synth(9)
+    chunked.trigger_thunder(0.2)
+    pieces = [chunked.render(size, params) for size in (_BLOCK, 1, 4410, 17, 100_000)]
+    pieces.append(chunked.render(frames - sum(piece.shape[0] for piece in pieces), params))
+    np.testing.assert_allclose(np.concatenate(pieces), reference, atol=1e-7)
+
+
+def test_reset_drops_pending_thunder() -> None:
+    synth = _synth()
+    synth.trigger_thunder(0.2)
+    synth.reset()
+    assert synth.thunder_voice_count == 0

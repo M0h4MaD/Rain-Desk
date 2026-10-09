@@ -271,6 +271,11 @@ STRINGS: Final[dict[str, str]] = {
     "setting.sound_follows_intensity.tip": "يعلو الصوت ويكثف كلما اشتد المطر.",
     "setting.sound_wind.label": "صوت الرياح",
     "setting.sound_wind.tip": "يضيف طبقة رياح ناعمة تتبع الرياح وهبّاتها.",
+    "setting.sound_thunder.label": "الرعد",
+    "setting.sound_thunder.tip": (
+        "يشغّل الرعد بعد كل وميض برق: كلما اقترب الوميض أتى الرعد أسرع وأعلى. "
+        "يتطلب تفعيل البرق والصوت."
+    ),
     "note.sound_unavailable": "الصوت غير متاح: لم يُعثر على جهاز إخراج صوتي.",
     "tray.sound": "صوت المطر",
 }

@@ -3,11 +3,13 @@
 الغرض: يدير نوافذ overlay (واحدة لكل شاشة مختارة) ويقود المحاكاة المشتركة بينها.
 المسؤوليات: اختيار الشاشات وإعادة البناء مع إعادة استخدام النوافذ، وأسباب الإيقاف، وحارس
     التثبيت، وتنعيم المعاملات (ParamSmoother)، والعصف المشترك، وآلة الطقس التلقائي، وبرق واحد
-    مشترك بين الشاشات، والجودة التكيفية، وتمرير tick إلى كل النوافذ.
+    مشترك بين الشاشات، والجودة التكيفية، وتفويض الشخصية Drip إلى MascotHost، وتمرير tick إلى
+    كل النوافذ.
 الاعتماديات: config.store وengine (math_utils وparams وweather_fsm وadaptive_quality)
-    وui.frame_clock وui.overlay_window وplatform_win.win32_api.
+    وui.frame_clock وui.overlay_window وui.mascot_host وplatform_win.win32_api.
 النمط التصميمي: Mediator بين FrameClock والنوافذ، مع Debounce لأحداث توصيل الشاشات.
 ملاحظات: العصف والمعاملات والطقس والبرق مشتركة بين الشاشات كي تتحرك الرياح بتناسق عبر الأجهزة.
+    الشخصية تتجمد مع الإيقاف لأن الساعة تقف، ولا كلفة لها إن عُطّلت (MascotHost.step).
     الإيقاف = hide() + إيقاف الساعة (لا نُتلف النوافذ لتجنّب الوميض). البرق يُجبَر على الإيقاف
     إن عطّل المستخدم رسوم Windows المتحركة (حساسية الضوء). الطقس التلقائي يتقدم على الإعدادات
     اليدوية للقيم السبع المقابلة لمفاتيح PRESETS ويُنعَّم عبر ParamSmoother.
@@ -34,6 +36,7 @@ from raindesk.engine.params import ParamSmoother, params_from_settings
 from raindesk.engine.weather_fsm import LightningModel, WeatherStateMachine
 from raindesk.platform_win import win32_api
 from raindesk.ui.frame_clock import FrameClock
+from raindesk.ui.mascot_host import MASCOT_KEYS, MascotHost
 from raindesk.ui.overlay_window import OverlayWindow, compute_screen_key
 
 _LOG = logging.getLogger(__name__)
@@ -86,8 +89,11 @@ class OverlayManager(QObject):
     simulation_updated = Signal(
         object, float
     )  # (EngineParams المنعّمة، العصف) بعد كل tick
+    paused_changed = Signal(
+        bool
+    )  # حالة "متوقف/يعمل" بعد أي تغيّر (يستهلكها AppController)
 
-    paused_changed = Signal(bool)
+    lightning_struck = Signal(float)  # شدة وميض برق جديد (لإطلاق الرعد المناسب)
 
     def __init__(
         self, store: SettingsStore, clock: FrameClock, parent: QObject | None = None
@@ -126,6 +132,8 @@ class OverlayManager(QObject):
         self._lightning = LightningModel(random.Random(self._derive_seed()))
         self._adaptive = AdaptiveQuality()
         self._configure_effects()
+        # آخر استهلاك للبذرة كي لا تتغير تيارات الطقس والبرق عن النسخ السابقة.
+        self._mascot = MascotHost(store, random.Random(self._derive_seed()))
 
         self._rebuild_timer = QTimer(self)
         self._rebuild_timer.setSingleShot(True)
@@ -163,7 +171,8 @@ class OverlayManager(QObject):
             self._reasons.discard(reason)
         if self.paused != was_paused:
             _LOG.info(
-                "overlay %s (reasons: %s)", "paused" if self.paused else "resumed",
+                "overlay %s (reasons: %s)",
+                "paused" if self.paused else "resumed",
                 sorted(self._reasons),
             )
             self._sync_run_state()
@@ -226,6 +235,7 @@ class OverlayManager(QObject):
                 window.shutdown()
         self._windows = result
         _LOG.info("overlay windows: %d", len(result))
+        self._mascot.sync(self._windows)
         self._sync_run_state()
 
     def _sync_run_state(self) -> None:
@@ -305,11 +315,14 @@ class OverlayManager(QObject):
             self.refresh_options()
         if key in _EFFECT_KEYS:
             self._configure_effects()
+        if key in MASCOT_KEYS:
+            self._mascot.sync(self._windows)
 
     def _on_store_reloaded(self) -> None:
         """بعد load() أو استبدال كامل: نقفز للقيم الجديدة بدل تنعيمها من القديمة."""
         self._refresh_target(snap=True)
         self._configure_effects()
+        self._mascot.sync(self._windows)
 
     def _on_tick(self, dt: float) -> None:
         if self._target_dirty:
@@ -317,13 +330,21 @@ class OverlayManager(QObject):
         self._weather.step(dt)
         if self._weather.enabled:
             self._apply_target()  # قيم الطقس تتغير كل إطار (ينعّمها ParamSmoother)
+
+        strikes_before = self._lightning.event_count
         self._lightning.step(dt)
+        if self._lightning.event_count != strikes_before:
+            self.lightning_struck.emit(self._lightning.alpha)  # alpha عند بداية الحدث = ذروته
+
         params = self._smoother.step(dt)
         period = max(params.gust_period_s, _MIN_GUST_PERIOD_S)
         self._gust_cycles += dt / period
         # t = cycles * T يعطي t / T = cycles، فيبقى الطور متصلًا حتى لو تغيّرت الدورة T.
         gust = gust_signal(self._gust_cycles * period, period, self._gust_phases)
         flash = self._lightning.alpha
+        self._mascot.step(
+            dt, params.wind_angle_deg, params.intensity, flash
+        )  # لا كلفة إن عُطّلت
         cost_ms = 0.0
         for window in self._windows:
             window.advance(dt, params, gust)
@@ -361,6 +382,7 @@ class OverlayManager(QObject):
         self._rebuild_timer.stop()
         self._watchdog.stop()
         self._clock.stop()
+        self._mascot.shutdown()
         for signal, slot in (
             (self._clock.tick, self._on_tick),
             (self._clock.stall_detected, self._on_stall),

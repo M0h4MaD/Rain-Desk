@@ -72,6 +72,7 @@ class Settings:
     sound_volume: float = 0.35
     sound_follows_intensity: bool = True
     sound_wind: bool = True
+    sound_thunder: bool = True
     # --- الشخصية ---
     mascot_enabled: bool = True
     mascot_frequency: float = 0.4
@@ -205,6 +206,7 @@ _SPEC_LIST: Final[tuple[FieldSpec, ...]] = (
     _float("sound_volume", 0.35, 0.0, 1.0),
     _bool("sound_follows_intensity", True),
     _bool("sound_wind", True),
+    _bool("sound_thunder", True),
     _bool("mascot_enabled", True),
     _float("mascot_frequency", 0.4, 0.0, 1.0),
     _float("mascot_scale", 1.0, 0.5, 2.0),

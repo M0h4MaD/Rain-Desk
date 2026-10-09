@@ -61,7 +61,7 @@ _WATCHER_REASONS: Final[tuple[str, ...]] = (
     REASON_BATTERY,
 )
 _SOUND_KEYS: Final[frozenset[str]] = frozenset(
-    {"sound_enabled", "sound_volume", "sound_follows_intensity", "sound_wind"}
+     {"sound_enabled", "sound_volume", "sound_follows_intensity", "sound_wind", "sound_thunder"}
 )
 _FIXED_SOUND_INTENSITY: Final[float] = 0.5  # شدة الصوت عند إيقاف "يتبع شدة المطر"
 _WIND_ANGLE_REFERENCE_DEG: Final[float] = 60.0  # أقصى زاوية رياح في الواجهة
@@ -96,6 +96,7 @@ class AppController(QObject):
         self._sound_enabled = False
         self._sound_follows_intensity = True
         self._sound_wind = True
+        self._sound_thunder = True
         self._tray_available = True
         self._shut_down = False
 
@@ -119,6 +120,7 @@ class AppController(QObject):
         self._guard.activation_requested.connect(self.show_settings)
         self._manager.simulation_updated.connect(self._on_simulation_updated)
         self._manager.paused_changed.connect(self._on_paused_changed)
+        self._manager.lightning_struck.connect(self._on_lightning_struck)
         self._audio.availability_changed.connect(self._on_audio_availability)
         self._apply_sound_settings()
         self._reconcile_autostart()
@@ -222,6 +224,7 @@ class AppController(QObject):
         self._sound_enabled = bool(get("sound_enabled"))
         self._sound_follows_intensity = bool(get("sound_follows_intensity"))
         self._sound_wind = bool(get("sound_wind"))
+        self._sound_thunder = bool(get("sound_thunder"))
         volume = get("sound_volume")
         self._audio.set_volume(
             float(volume) if isinstance(volume, (int, float)) else 0.0
@@ -247,6 +250,11 @@ class AppController(QObject):
             1.0,
         )
         self._audio.update_params(intensity, wind_amount, gust, self._sound_wind)
+
+    def _on_lightning_struck(self, flash_peak: float) -> None:
+        """كل وميض برق يتبعه رعد بعد تأخير يناسب بعده، إن كان الصوت والرعد مفعّلين."""
+        if self._sound_enabled and self._sound_thunder:
+            self._audio.trigger_thunder(flash_peak)
 
     def _on_paused_changed(self, paused: bool) -> None:
         self._audio.set_active(not paused)
