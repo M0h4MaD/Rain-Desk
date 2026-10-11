@@ -40,6 +40,8 @@ class EffectsPage(BasePage):
         self._sound_note.setWordWrap(True)
         self._sound_switch = self.make_switch("sound_enabled")
         self._sound_dependents: list[QWidget] = []
+        self._wind_volume: QWidget | None = None
+        self._thunder_volume: QWidget | None = None
         self._add_splashes()
         self._add_streams()
         self._add_mood()
@@ -118,11 +120,15 @@ class EffectsPage(BasePage):
         )
         wind = self.make_row("setting.sound_wind.label", self.make_switch("sound_wind"))
         thunder = self.make_row("setting.sound_thunder.label", self.make_switch("sound_thunder"))
-        for widget in (volume, follows, wind, thunder):
+        wind_volume = self.make_slider("sound_wind_volume")
+        thunder_volume = self.make_slider("sound_thunder_volume")
+        for widget in (volume, follows, wind, wind_volume, thunder, thunder_volume):
             card.add_row(widget)
         card.add_row(self._sound_note)
         self._sound_dependents = [volume, follows, wind, thunder]
-        self.watch_key("sound_enabled", lambda _value: self._refresh_sound_state())
+        self._wind_volume, self._thunder_volume = wind_volume, thunder_volume
+        for key in ("sound_enabled", "sound_wind", "sound_thunder"):
+            self.watch_key(key, lambda _value: self._refresh_sound_state())
         self.add_card(card)
 
     def set_sound_available(self, available: bool) -> None:
@@ -135,6 +141,15 @@ class EffectsPage(BasePage):
         self._sound_switch.setEnabled(self._sound_available)
         for widget in self._sound_dependents:
             widget.setEnabled(self._sound_available and enabled)
+        # منزلقا الرياح والرعد يتبعان مفتاحيهما أيضًا (مفتاح مطفأ = منزلقه بلا معنى)
+        for slider, key in (
+            (self._wind_volume, "sound_wind"),
+            (self._thunder_volume, "sound_thunder"),
+        ):
+            if slider is not None:
+                slider.setEnabled(
+                    self._sound_available and enabled and bool(self._store.get(key))
+                )
         self._sound_note.setVisible(not self._sound_available)
 
     # ------------------------------------------------------------------ الترجمة

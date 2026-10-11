@@ -5,8 +5,11 @@
     المفاتيح، وعكس الاتجاه في RTL، وتعطيل الحركة إن عطّلها المستخدم في Windows.
 الاعتماديات: PySide6 وraindesk.platform_win.win32_api وraindesk.engine.math_utils.
 النمط التصميمي: Custom Widget مع Property Animation.
-ملاحظات: Space يبدّل الحالة تلقائيًا (سلوك QAbstractButton). يستدعي Qt الدالة checkStateSet
-    عند كل تغيّر في الحالة، حتى مع حجب الإشارات، فتبقى الحركة متزامنة مع الربط ثنائي الاتجاه.
+ملاحظات: Space يبدّل الحالة تلقائيًا (سلوك QAbstractButton). مصدران لتغيّر الحالة، ولكل
+    منهما مسار: (1) نقر المستخدم أو Space: لا تستدعي Qt الدالة checkStateSet (موثّق: لا تُستدعى
+    من داخل nextCheckState) فنتابع الإشارة toggled؛ (2) setChecked برمجيًا (الربط الثنائي
+    الاتجاه، وقد تُحجب إشاراته): تستدعي Qt الدالة checkStateSet فنتابعها. كان الاعتماد على
+    checkStateSet وحدها سببًا في أن المقبض لا يتحرك عند النقر إلا بعد تبديل الصفحة.
     المستدعي يضبط setAccessibleName لأن المفتاح بلا نص.
 مثال: switch = ToggleSwitch(); switch.setAccessibleName('Show rain'); switch.toggled.connect(f)
 """
@@ -54,6 +57,7 @@ class ToggleSwitch(QAbstractButton):
         self._animation = QPropertyAnimation(self, b"progress", self)
         self._animation.setDuration(_ANIMATION_MS)
         self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.toggled.connect(self._on_toggled)  # مسار نقر المستخدم (انظر ملاحظات الوحدة)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(_WIDTH_PX, _HEIGHT_PX)
@@ -70,6 +74,11 @@ class ToggleSwitch(QAbstractButton):
 
     def _animate_to(self, target: float) -> None:
         """ينتقل إلى الهدف بحركة، أو فورًا إن كانت النافذة مخفية أو الحركة معطّلة في Windows."""
+        running = self._animation.state() == QPropertyAnimation.State.Running
+        if running and self._animation.endValue() == target:
+            return  # المسارين (toggled وcheckStateSet) قد يتزامنان: لا نعيد تشغيل الحركة
+        if not running and self._progress == target:
+            return
         self._animation.stop()
         if not self.isVisible() or not win32_api.client_animations_enabled():
             self._set_progress(target)
@@ -77,6 +86,9 @@ class ToggleSwitch(QAbstractButton):
         self._animation.setStartValue(self._progress)
         self._animation.setEndValue(target)
         self._animation.start()
+
+    def _on_toggled(self, checked: bool) -> None:
+        self._animate_to(1.0 if checked else 0.0)
 
     def checkStateSet(self) -> None:  # noqa: N802
         super().checkStateSet()

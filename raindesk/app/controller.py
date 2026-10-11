@@ -61,8 +61,17 @@ _WATCHER_REASONS: Final[tuple[str, ...]] = (
     REASON_BATTERY,
 )
 _SOUND_KEYS: Final[frozenset[str]] = frozenset(
-     {"sound_enabled", "sound_volume", "sound_follows_intensity", "sound_wind", "sound_thunder"}
+    {
+        "sound_enabled",
+        "sound_volume",
+        "sound_follows_intensity",
+        "sound_wind",
+        "sound_thunder",
+        "sound_wind_volume",
+        "sound_thunder_volume",
+    }
 )
+_DEFAULT_SOUND_LEVEL: Final[float] = 0.5  # منزلقا الرياح والرعد: 0.5 = المستوى الأصلي
 _FIXED_SOUND_INTENSITY: Final[float] = 0.5  # شدة الصوت عند إيقاف "يتبع شدة المطر"
 _WIND_ANGLE_REFERENCE_DEG: Final[float] = 60.0  # أقصى زاوية رياح في الواجهة
 _WIND_ANGLE_WEIGHT: Final[float] = 0.4  # وزن زاوية الرياح في كمية صوت الرياح
@@ -229,10 +238,17 @@ class AppController(QObject):
         self._audio.set_volume(
             float(volume) if isinstance(volume, (int, float)) else 0.0
         )
+        self._audio.set_wind_volume(self._level("sound_wind_volume"))
+        self._audio.set_thunder_volume(self._level("sound_thunder_volume"))
         self._audio.set_active(not self._manager.paused)
         self._audio.set_enabled(self._sound_enabled)
         self._tray.set_sound_state(self._sound_enabled)
         self._tray.set_sound_available(self._audio.is_available)
+
+    def _level(self, key: str) -> float:
+        """مستوى منزلق صوت في [0, 1]؛ قيمة غير رقمية (ملف تالف) تعود إلى الأصلي 0.5."""
+        value = self._store.get(key)
+        return float(value) if isinstance(value, (int, float)) else _DEFAULT_SOUND_LEVEL
 
     def _on_simulation_updated(self, params: object, gust: float) -> None:
         """يغذّي الصوت بمعاملات الإطار: الشدة، وكمية الرياح من زاويتها وهبّاتها."""

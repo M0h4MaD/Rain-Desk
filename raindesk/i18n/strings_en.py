@@ -292,6 +292,16 @@ STRINGS: Final[dict[str, str]] = {
         "Plays thunder after each lightning flash: the closer the flash, the sooner and "
         "louder the thunder. Needs lightning and sound to be on."
     ),
+    "setting.sound_wind_volume.label": "Wind level",
+    "setting.sound_wind_volume.tip": (
+        "Loudness of the wind sound. The middle is the original level; the right end is twice "
+        "as loud and the left end is silent."
+    ),
+    "setting.sound_thunder_volume.label": "Thunder level",
+    "setting.sound_thunder_volume.tip": (
+        "Loudness of the thunder. The middle is the original level; the right end is twice "
+        "as loud and the left end is silent."
+    ),
     "note.sound_unavailable": "Sound is unavailable: no audio output device was found.",
     "tray.sound": "Rain sound",
 }

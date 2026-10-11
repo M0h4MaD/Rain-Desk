@@ -73,6 +73,8 @@ class Settings:
     sound_follows_intensity: bool = True
     sound_wind: bool = True
     sound_thunder: bool = True
+    sound_wind_volume: float = 0.5  # مستوى الرياح: 0.5 = الأصلي، 1 = ضعف، 0 = صامت
+    sound_thunder_volume: float = 0.5  # مستوى الرعد (بنفس المقياس)
     # --- الشخصية ---
     mascot_enabled: bool = True
     mascot_frequency: float = 0.4
@@ -207,6 +209,8 @@ _SPEC_LIST: Final[tuple[FieldSpec, ...]] = (
     _bool("sound_follows_intensity", True),
     _bool("sound_wind", True),
     _bool("sound_thunder", True),
+    _float("sound_wind_volume", 0.5, 0.0, 1.0),
+    _float("sound_thunder_volume", 0.5, 0.0, 1.0),
     _bool("mascot_enabled", True),
     _float("mascot_frequency", 0.4, 0.0, 1.0),
     _float("mascot_scale", 1.0, 0.5, 2.0),

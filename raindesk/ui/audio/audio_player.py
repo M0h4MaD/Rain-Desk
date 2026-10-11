@@ -4,10 +4,18 @@
 المسؤوليات: تحميل QtMultimedia كسولًا عند أول استعمال، وفتح الجهاز عند الحاجة وإغلاقه بعد
     2 s من الصمت، ومؤقّت 20 ms يملأ المخزن بكتل جاهزة، وغلاف ظهور واختفاء 250 ms (fade)، وتتبّع
     توفّر الصوت (جهاز غائب، خطأ، تغيير جهاز) وإبلاغه، دون أن يرفع أي استثناء إلى الواجهة.
+    حالة الجهاز تُفحص دوريًا داخل المؤقّت (لا نربط إشارة stateChanged: انظر الملاحظات).
+    بناء المولّد (حلقات الضجيج وبنك القطرات وعيّنات الرعد) يجري على خيط خلفي فلا تتجمد الواجهة.
 الاعتماديات: PySide6 (QtCore، وQtMultimedia كسولًا) وraindesk.engine.rain_audio وraindesk.core.
 النمط التصميمي: Producer مبني على المؤقّت (push mode) مع State Machine صغيرة لحالة الجهاز.
 ملاحظات: الصوت معطّل افتراضيًا ولا يُحمَّل QtMultimedia إلا عند تفعيله فعلًا. توفّر الصوت
-    "مجهول" قبل أول محاولة ويُعامَل كمتاح. الكتلة تولَّد على خيط الواجهة (نحو 0.1 ms لكل كتلة).
+    "مجهول" قبل أول محاولة ويُعامَل كمتاح. الكتلة تولَّد على خيط الواجهة (نحو 0.5 ms لكل كتلة)،
+    أما البناء الأولي (ثانية أو أكثر) فيجري على خيط خلفي: عمل NumPy الثقيل (irfft وexp) يفرج
+    عن GIL فلا يتأخر الرسم أكثر من بضعة ms (قياس: أقصى فجوة 4 ms)؛ والخيط daemon فلا يمنع
+    إغلاق التطبيق. الجهاز لا يُفتح إلا بعد اكتمال البناء (يُستطلَع كل 50 ms).
+    لا نربط sink.stateChanged لأن PySide6 يفشل أحيانًا في تحويل معامل QAudio::State إلى slot
+    بايثون (TypeError: Cannot call meta function ... QAudio::State) فيسقط الصوت؛ فحص
+    state() وerror() كل نبضة (20 ms) أبسط وأمتن ولا كلفة تُذكر.
     مستوى الصوت يُطبَّق مربّعًا: master = volume^2 * fade (إدراك الجهارة لوغاريتمي تقريبًا).
 مثال: player.set_volume(0.35); player.set_enabled(True); player.update_params(0.6, 0.4, 0.1, True)
 """
@@ -16,6 +24,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import threading
 import time
 from typing import Any, Final
 
@@ -41,6 +50,10 @@ _MAX_BLOCKS_PER_TICK: Final[int] = 3  # أقصى كتل نملأ بها المخ
 _DEVICE_CHANGE_DEBOUNCE_MS: Final[int] = 500  # ms: دمج إشعارات تغيّر أجهزة الإخراج
 _FADE_STEP_PER_BLOCK: Final[float] = AUDIO_BLOCK_MS / AUDIO_FADE_MS  # تقدّم الغلاف لكل كتلة
 _DEFAULT_VOLUME: Final[float] = 0.35
+_DEFAULT_LEVEL: Final[float] = 0.5  # منزلق الرياح/الرعد: 0.5 = المستوى الأصلي
+_LEVEL_SCALE: Final[float] = 2.0  # منزلق [0, 1] -> مضاعف [0, 2]
+_BUILD_POLL_MS: Final[int] = 50  # ms: استطلاع اكتمال بناء المولّد
+_BUILD_JOIN_S: Final[float] = 3.0  # ثانية: أقصى انتظار لخيط البناء عند الإغلاق
 
 
 class RainAudioPlayer(QObject):
@@ -57,6 +70,8 @@ class RainAudioPlayer(QObject):
         self._enabled = False
         self._active = True
         self._volume = _DEFAULT_VOLUME
+        self._wind_volume = _DEFAULT_LEVEL
+        self._thunder_volume = _DEFAULT_LEVEL
         self._intensity = 0.0
         self._wind_amount = 0.0
         self._gust = 0.0
@@ -65,6 +80,11 @@ class RainAudioPlayer(QObject):
         self._target = 0.0  # هدف الغلاف: 1 عند التشغيل الفعلي وإلا 0
         self._silent_since: float | None = None
         self._synth: RainSynth | None = None
+        self._build_thread: threading.Thread | None = None
+        self._build_result: RainSynth | None = None  # يكتبه الخيط الخلفي مرة واحدة فقط
+        self._build_error: BaseException | None = None
+        self._build_started = 0.0
+        self._build_closing = False  # True بعد shutdown: نتجاهل ناتج البناء
         self._sink: Any = None
         self._io: Any = None
         self._block_frames = round(AUDIO_SAMPLE_RATE * AUDIO_BLOCK_MS / _MS_PER_SECOND)
@@ -73,6 +93,9 @@ class RainAudioPlayer(QObject):
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(AUDIO_BLOCK_MS)
         self._timer.timeout.connect(self._on_timer)
+        self._build_timer = QTimer(self)
+        self._build_timer.setInterval(_BUILD_POLL_MS)
+        self._build_timer.timeout.connect(self._poll_build)
         self._device_timer = QTimer(self)
         self._device_timer.setSingleShot(True)
         self._device_timer.setInterval(_DEVICE_CHANGE_DEBOUNCE_MS)
@@ -92,6 +115,14 @@ class RainAudioPlayer(QObject):
     def set_volume(self, volume: float) -> None:
         """مستوى الصوت في [0, 1] (يُطبَّق مربّعًا)."""
         self._volume = clamp(volume, 0.0, 1.0)
+
+    def set_wind_volume(self, level: float) -> None:
+        """مستوى الرياح في [0, 1] (0.5 = الأصلي، 1 = ضعف، 0 = صامت)."""
+        self._wind_volume = clamp(level, 0.0, 1.0)
+
+    def set_thunder_volume(self, level: float) -> None:
+        """مستوى الرعد في [0, 1] (0.5 = الأصلي، 1 = ضعف، 0 = صامت)."""
+        self._thunder_volume = clamp(level, 0.0, 1.0)
 
     def set_active(self, active: bool) -> None:
         """False أثناء إيقاف المطر مؤقتًا (ملء الشاشة، قفل...) فيخفت الصوت أيضًا."""
@@ -115,12 +146,17 @@ class RainAudioPlayer(QObject):
         if self._synth is None or self._sink is None or self._target <= 0.0:
             return
         self._synth.trigger_thunder(flash_peak)
-        
+
     def shutdown(self) -> None:
         """يوقف المؤقّتات ويحرّر الجهاز فورًا (عند إغلاق التطبيق)."""
+        self._build_closing = True
         self._timer.stop()
         self._device_timer.stop()
+        self._build_timer.stop()
         self._release_device()
+        thread = self._build_thread
+        if thread is not None and thread.is_alive():
+            thread.join(_BUILD_JOIN_S)  # daemon: إن لم ينته لا يمنع الخروج
 
     # ------------------------------------------------------------------ تحميل QtMultimedia
     def _load_multimedia(self) -> bool:
@@ -180,14 +216,12 @@ class RainAudioPlayer(QObject):
                 return False
         rate = int(audio_format.sampleRate())
         if self._synth is None or self._synth.sample_rate != rate:
-            started = time.perf_counter()
-            self._synth = RainSynth(np.random.default_rng(), sample_rate=rate)
-            _LOG.info("rain synth built in %.0f ms", (time.perf_counter() - started) * 1000.0)
+            self._start_build(rate)  # غير متزامن: يعود _poll_build إلى هنا بعد الاكتمال
+            return True
         self._block_frames = round(rate * AUDIO_BLOCK_MS / _MS_PER_SECOND)
         self._block_bytes = self._block_frames * _BYTES_PER_FRAME
         sink = mm.QAudioSink(device, audio_format, self)
         sink.setBufferSize(round(rate * _BYTES_PER_FRAME * AUDIO_BUFFER_MS / _MS_PER_SECOND))
-        sink.stateChanged.connect(self._on_state_changed)
         stream = sink.start()  # وضع push: يعيد QIODevice نكتب فيه الكتل
         if stream is None:
             sink.deleteLater()
@@ -200,15 +234,54 @@ class RainAudioPlayer(QObject):
         self._set_availability(True)
         return True
 
+    # ------------------------------------------------------------------ بناء المولّد (خيط خلفي)
+    def _start_build(self, rate: int) -> None:
+        """يبدأ بناء RainSynth على خيط daemon إن لم يكن هناك بناء جارٍ."""
+        thread = self._build_thread
+        if thread is not None and thread.is_alive():
+            return
+        self._build_result, self._build_error = None, None
+        self._build_started = time.perf_counter()
+        self._build_thread = threading.Thread(
+            target=self._build_worker, args=(rate,), name="raindesk-audio-build", daemon=True
+        )
+        self._build_thread.start()
+        self._build_timer.start()
+
+    def _build_worker(self, rate: int) -> None:
+        """جسم الخيط الخلفي: لا يلمس أي كائن Qt؛ يكتب النتيجة أو الخطأ ثم ينتهي."""
+        try:
+            self._build_result = RainSynth(
+                np.random.default_rng(), sample_rate=rate, prebuild_thunder=True
+            )
+        except BaseException as exc:  # noqa: BLE001  يُنقَل الخطأ إلى خيط الواجهة ليُسجَّل
+            self._build_error = exc
+
+    def _poll_build(self) -> None:
+        """على خيط الواجهة: ينتظر انتهاء البناء ثم يكمل فتح الجهاز إن كان الصوت ما زال مطلوبًا."""
+        thread = self._build_thread
+        if thread is not None and thread.is_alive():
+            return
+        self._build_timer.stop()
+        self._build_thread = None
+        if self._build_closing:
+            return
+        if self._build_error is not None:
+            self._fail(f"could not build the rain synth: {self._build_error!r}")
+            return
+        self._synth, self._build_result = self._build_result, None
+        _LOG.info(
+            "rain synth built in %.0f ms (background thread)",
+            (time.perf_counter() - self._build_started) * 1000.0,
+        )
+        if self._enabled and self._active and self._sink is None:
+            self._open_device()
+
     def _release_device(self) -> None:
         """يوقف المؤقّت ويغلق الجهاز ويصفّر ذيل المولّد؛ آمن عند عدم وجود جهاز."""
         self._timer.stop()
         sink, self._sink, self._io = self._sink, None, None
         if sink is not None:
-            try:
-                sink.stateChanged.disconnect(self._on_state_changed)
-            except (RuntimeError, TypeError):
-                pass
             sink.stop()
             sink.deleteLater()
         if self._synth is not None:
@@ -228,6 +301,8 @@ class RainAudioPlayer(QObject):
         if sink is None or stream is None or synth is None:
             self._timer.stop()
             return
+        if self._sink_failed(sink):
+            return
         for _ in range(_MAX_BLOCKS_PER_TICK):
             if sink.bytesFree() < self._block_bytes:
                 break  # المخزن ممتلئ بما يكفي: ننتظر النبضة التالية
@@ -235,7 +310,13 @@ class RainAudioPlayer(QObject):
             self._fade += delta
             master = self._volume * self._volume * self._fade
             params = AudioParams(
-                self._intensity, self._wind_amount, self._gust, master, self._wind_enabled
+                self._intensity,
+                self._wind_amount,
+                self._gust,
+                master,
+                self._wind_enabled,
+                thunder_level=self._thunder_volume * _LEVEL_SCALE,
+                wind_level=self._wind_volume * _LEVEL_SCALE,
             )
             stream.write(synth.render_int16(self._block_frames, params))
         self._maybe_release_when_silent()
@@ -252,12 +333,15 @@ class RainAudioPlayer(QObject):
             self._silent_since = None
 
     # ------------------------------------------------------------------ أحداث الجهاز
-    def _on_state_changed(self, state: Any) -> None:
+    def _sink_failed(self, sink: Any) -> bool:
+        """يفحص الجهاز: إن توقف بخطأ نعلن عدم التوفر ونعيد True (يُستدعى كل نبضة)."""
         mm = self._mm
-        if mm is None or self._sink is None:
-            return
-        if state == mm.QAudio.State.StoppedState and self._sink.error() != mm.QAudio.Error.NoError:
-            self._fail(f"audio sink stopped with error {self._sink.error()}")
+        if mm is None:
+            return False
+        if sink.state() == mm.QAudio.State.StoppedState and sink.error() != mm.QAudio.Error.NoError:
+            self._fail(f"audio sink stopped with error {sink.error()}")
+            return True
+        return False
 
     def _on_outputs_changed(self) -> None:
         """تغيّرت أجهزة الإخراج (توصيل سماعة مثلًا): ننتظر استقرار الإشعارات ثم نعيد الفتح."""
