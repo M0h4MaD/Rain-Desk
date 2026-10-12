@@ -8,7 +8,7 @@ cells yourself on your own machine and commit the file; the report (docs/report.
 
 | Item | Value |
 |---|---|
-| Date |  |
+| Date | 2026/10 |
 | Machine (CPU, RAM, GPU) |  |
 | Windows edition and build (`winver`) |  |
 | Display setup (resolution, scaling, monitors) |  |
