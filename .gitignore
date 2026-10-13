@@ -30,3 +30,4 @@ Thumbs.db
 desktop.ini
 
 # --- ملاحظة: نُبقي requirements.lock.txt و assets/raindesk.ico في المستودع عمدًا ---
+settings.json

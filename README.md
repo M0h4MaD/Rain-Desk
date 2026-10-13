@@ -1,10 +1,28 @@
 # RainDesk
 
-A lightweight rain overlay for Windows 10 and 11. Rain, wind, splashes, lightning and a small
-mascot (Drip) play on top of your desktop while every click and keystroke still reaches the
-programs underneath. Written in Python with PySide6 (Qt 6) and NumPy.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platform: Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-informational)
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
+
+A free, lightweight rain overlay for Windows. Rain, wind, thunder and a small mascot (Drip) play
+on top of your desktop while every click and keystroke still reaches the programs underneath.
+Written in Python with PySide6 (Qt 6) and NumPy. No network access, no telemetry.
+
+<!-- Drag your demo video (MP4, under 10 MB) into the GitHub editor here; it will insert a link. -->
 
 *(ملخص بالعربية في آخر الملف.)*
+
+## Download
+
+Grab the latest `RainDesk-<version>-win64.zip` from the
+[Releases](https://github.com/M0h4MaD/Rain-Desk/releases) page, unzip it anywhere and run
+`RainDesk.exe`. No installer is needed. The SHA-256 of each zip is listed in the release notes.
+
+> **Tested on Windows 10 only so far.** The executable is not code-signed, so SmartScreen may
+> show an "unknown publisher" warning (More info, then Run anyway). Reports from Windows 11 and
+> from multi-monitor setups with mixed DPI are very welcome: please open an issue.
+
+Prefer to run it from source? See [Run from source](#run-from-source).
 
 ## Features
 
@@ -16,11 +34,15 @@ programs underneath. Written in Python with PySide6 (Qt 6) and NumPy.
   running down the screen edges, and an optional colour mood tint.
 * **Auto weather**: a small state machine drifts between the presets so the weather changes
   by itself (variability is adjustable).
-* **Lightning** with a brightness cap; it is forced off when Windows animations are disabled
-  (light-sensitivity friendly).
-* **Sound**: the rain is synthesized live (a noise bed, individual drops and wind), so there are
-  no audio files. It follows intensity and wind, fades out when the rain pauses and releases the
-  audio device when idle. Output only: the microphone is never opened.
+* **Realistic depth and wind**: near drops are long and fast, far drops short and faint, and
+  wind arrives in gusts instead of one constant slant.
+* **Water streams on the screen edges**: drops grow, stick, slide, merge and leave wet trails.
+* **Lightning** with a brightness cap and a flash-rate limit (off by default); it is forced off
+  when Windows animations are disabled (light-sensitivity friendly). Thunder follows the flash
+  after a delay that depends on how close it was.
+* **Sound**: rain, wind and thunder are synthesized live, so there are no audio files. Wind and
+  thunder have their own volume sliders. It follows intensity and wind, fades out when the rain
+  pauses and releases the audio device when idle. Output only: the microphone is never opened.
 
 **Drip, the mascot**
 * A small water drop that now and then walks along the top of the taskbar, jumps, dances,
@@ -117,7 +139,8 @@ paths, no personal data.
 | Rain on the wrong monitor | Display and Performance page: choose primary, all, or selected screens. |
 | Lightning never happens | It is off when Windows animation effects are off (Windows Accessibility settings). |
 | High CPU | Lower *Quality*, the FPS cap or the intensity, or enable *Adaptive quality*. |
-| SmartScreen says "unknown publisher" (packaged build) | The executable is not code-signed. Compare the SHA-256 of the download with the one published next to it. |
+| SmartScreen says "unknown publisher" (packaged build) | The executable is not code-signed. Compare the SHA-256 of the download with the one in the release notes, then choose *More info*, *Run anyway*. |
+| Rain does not show over a full-screen game | By default RainDesk pauses for full-screen apps; switch that option off to keep it showing. Games in exclusive full-screen mode may still cover the overlay (not tested). |
 
 ## Development
 
@@ -141,6 +164,11 @@ python tools/endurance_monitor.py         # 60-minute memory growth test (see do
 ```
 
 `docs/quality_assurance.md` holds the manual test matrix, the endurance and benchmark records.
+`docs/report.md` is a technical report (in Arabic, with English technical terms) covering the
+design, the math, the architecture and the measurements. The benchmark results quoted there
+(Windows 10, 12 logical cores) are in `bench_results.csv`: the simulation step is about 0.05 ms at
+1000 drops, and painting is the real cost (about 8.4 ms at 1000 drops with anti-aliasing at 1080p,
+3.6 ms without). Anti-aliasing is off in the *Low* quality profile.
 
 ### Layout
 
@@ -156,45 +184,47 @@ raindesk/
   ui/                       overlay windows, painters, tray, settings window and pages,
                             audio player (QtMultimedia), mascot host
   app/                      composition root (bootstrap) and AppController
-tools/                      benchmarks, endurance monitor (icon tool added with packaging)
+tools/                      benchmarks, endurance monitor, icon tool, packaging script
 tests/                      pytest suite
-docs/                       quality records (report added later)
+docs/                       quality records and the technical report (report.md)
 ```
 
 Dependencies point one way: `ui -> app -> engine / config / platform_win / i18n -> core`.
 `engine/`, `config/schema.py` and the Win32 helpers never import PySide6, so they are tested
 without a display. Every long-lived object has an explicit `shutdown()`; the simulation runs
-on the GUI thread (no worker threads), driven by one frame clock.
+on the GUI thread, driven by one frame clock. The only worker thread builds the sound
+synthesizer (noise loops and thunder samples) so that enabling sound never freezes the UI.
 
 ## Build a distributable
 
 ```powershell
-pip install -r requirements-dev.txt
-python tools/package.py            # icon, PyInstaller, license files, ZIP and SHA-256
-python tools/package.py --no-sound # smaller build without the rain sound
-iscc installer\raindesk.iss        # optional per-user installer (Inno Setup 6)
+python tools/package.py                  # icon, PyInstaller build, licenses, zip and SHA-256
+python tools/package.py --no-sound       # variant without QtMultimedia
+python tools/package.py --skip-build     # re-zip after adding files to dist\RainDesk
+iscc installer\raindesk.iss              # optional installer (needs Inno Setup 6)
 ```
 
 The default is a folder build (`onedir`): faster start, fewer antivirus false positives, and the
-Qt libraries stay replaceable files, which the LGPL requires. `tools/package.py` also copies the
-license files into `dist\RainDesk\licenses\`; add the LGPLv3 and GPLv3 texts as described in
-`THIRD_PARTY_NOTICES.md`. Design decisions and the Windows verification checklist are in
-`docs/packaging.md`.
+Qt libraries stay replaceable files, which the LGPL requires. Copy the license texts into
+`dist\RainDesk\licenses\` as described in `THIRD_PARTY_NOTICES.md`, then re-zip with
+`--skip-build`. More detail and the Windows checklist are in `docs/packaging.md`.
 
 ## Third-party software and license
 
 RainDesk uses Python, PySide6 (Qt for Python, LGPLv3), NumPy (BSD-3-Clause) and, for building,
-PyInstaller. See `THIRD_PARTY_NOTICES.md`. RainDesk's own license has not been chosen yet; until
-then all rights are reserved by the author.
+PyInstaller. See `THIRD_PARTY_NOTICES.md`.
+
+RainDesk itself is released under the [MIT License](LICENSE).
 
 ---
 
 ## ملخص بالعربية
 
-**RainDesk** تطبيق خفيف لنظام Windows 10 و11 يعرض مطرًا ورياحًا وبرقًا وصوت مطر فوق سطح
+**RainDesk** تطبيق خفيف لنظام Windows 10 و11 يعرض مطرًا ورياحًا وبرقًا ورعدًا وصوت مطر فوق سطح
 المكتب، مع شخصية صغيرة اسمها **Drip** تمشي فوق شريط المهام وتلعب مع مؤشر الفأرة. النافذة
 شفافة وتمرّر كل النقرات والكتابة إلى البرامج تحتها، ولا تظهر في Alt+Tab أو شريط المهام.
 
+* **التنزيل**: من صفحة Releases حمّل ملف `RainDesk-<version>-win64.zip` وفُكّه وشغّل `RainDesk.exe`.
 * **التشغيل من المصدر**: ثبّت Python 3.12 (64 بت)، ثم في PowerShell:
   `py -3.12 -m venv .venv` ثم `.\.venv\Scripts\Activate.ps1` ثم
   `pip install -r requirements-dev.txt` ثم `python main.py`.
@@ -206,4 +236,5 @@ then all rights are reserved by the author.
   `mypy --strict raindesk/engine raindesk/config raindesk/core` و`pytest -q`
   (نفّذ `ruff check --fix .` و`ruff format .` مرة واحدة إن لزم التنسيق).
 * **سجل الاختبارات اليدوية والتحمّل والأداء**: `docs/quality_assurance.md`.
-* **التراخيص**: انظر `THIRD_PARTY_NOTICES.md` (PySide6/Qt بترخيص LGPLv3 وربط ديناميكي).
+* **التراخيص**: المشروع نفسه بترخيص MIT (ملف `LICENSE`). والمكتبات الخارجية في
+  `THIRD_PARTY_NOTICES.md` (PySide6/Qt بترخيص LGPLv3 وربط ديناميكي).
