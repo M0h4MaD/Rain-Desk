@@ -20,7 +20,7 @@ quote-style = "double"
 line-ending = "lf"
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true  # يُطبَّق على raindesk/engine وraindesk/config وraindesk/core (انظر الأمر أدناه)
 warn_unused_configs = true
 # mypy --strict raindesk/engine raindesk/config raindesk/core
