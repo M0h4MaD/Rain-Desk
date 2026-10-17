@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import types
@@ -37,8 +38,8 @@ class _FakeSink:
         self._state = _FakeQAudio.State.ActiveState
         self._error = _FakeQAudio.Error.NoError
 
-    def setBufferSize(self, _size: int) -> None:  # noqa: N802
-        pass
+    def setBufferSize(self, size: int) -> None:  # noqa: N802
+        self.buffer_size = size
 
     def start(self) -> _FakeIO:
         return self.io
@@ -63,6 +64,7 @@ class _FakeQAudio:
     class State:
         StoppedState = "stopped"
         ActiveState = "active"
+        IdleState = "idle"
 
     class Error:
         NoError = 0
@@ -139,12 +141,31 @@ class _GatedSynth:
         self.thunder.append(peak)
 
 
+class _FakePower:
+    """بديل platform_win.power: يسجّل الطلبات فقط."""
+
+    calls: list[str] = []
+
+    @staticmethod
+    def begin_responsive_timing() -> object:
+        _FakePower.calls.append("begin")
+        return "token"
+
+    @staticmethod
+    def end_responsive_timing(boost: object) -> None:
+        _FakePower.calls.append(f"end:{boost}")
+
+    TimingBoost = object
+
+
 @pytest.fixture
 def player(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(
         audio_player, "importlib", types.SimpleNamespace(import_module=lambda _n: _FAKE_MM)
     )
     monkeypatch.setattr(audio_player, "RainSynth", _GatedSynth)
+    monkeypatch.setattr(audio_player, "power", _FakePower)
+    _FakePower.calls = []
     _GatedSynth.gate = threading.Event()
     _GatedSynth.fail = False
     instance = RainAudioPlayer()
@@ -236,3 +257,50 @@ def test_no_state_changed_connection_remains() -> None:
     source = audio_player.__file__
     text = open(source, encoding="utf-8").read()
     assert "stateChanged.connect" not in text  # سبب TypeError القديم
+
+
+def test_sink_buffer_is_250_ms(qapp: QApplication, player: RainAudioPlayer) -> None:
+    _GatedSynth.gate.set()
+    player.set_enabled(True)
+    assert _spin(qapp, lambda: player._sink is not None)
+    assert player._sink.buffer_size == 44100 * 4 * 250 // 1000  # معدل 44.1 kHz، 4 بايت للإطار
+
+
+def test_responsive_timing_is_requested_while_the_device_is_open(
+    qapp: QApplication, player: RainAudioPlayer
+) -> None:
+    _GatedSynth.gate.set()
+    player.set_enabled(True)
+    assert _spin(qapp, lambda: player._sink is not None)
+    assert _FakePower.calls == ["begin"]
+    player.set_enabled(False)
+    player.shutdown()
+    assert _FakePower.calls == ["begin", "end:token"]  # يُلغى الطلب عند إغلاق الجهاز
+
+
+def test_underruns_are_counted_after_the_grace_period_and_reported(
+    qapp: QApplication, player: RainAudioPlayer, caplog: pytest.LogCaptureFixture
+) -> None:
+    _GatedSynth.gate.set()
+    player.set_enabled(True)
+    assert _spin(qapp, lambda: player._sink is not None)
+    player._sink._state = _FakeQAudio.State.IdleState
+    _spin(qapp, lambda: False, 0.1)
+    assert player._underruns == 0  # ضمن فترة السماح بعد الفتح: لا نعدّ
+    player._opened_at -= 5.0
+    player._last_report -= 20.0
+    with caplog.at_level(logging.WARNING, logger=audio_player.__name__):
+        assert _spin(qapp, lambda: any("audio underruns" in r.message for r in caplog.records))
+    assert player._underruns > 0
+    assert "max timer gap" in caplog.records[-1].message
+
+
+def test_no_underrun_is_counted_while_the_sink_is_active(
+    qapp: QApplication, player: RainAudioPlayer
+) -> None:
+    _GatedSynth.gate.set()
+    player.set_enabled(True)
+    assert _spin(qapp, lambda: player._sink is not None)
+    player._opened_at -= 5.0
+    _spin(qapp, lambda: False, 0.2)
+    assert player._underruns == 0

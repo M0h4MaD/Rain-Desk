@@ -16,6 +16,9 @@
     لا نربط sink.stateChanged لأن PySide6 يفشل أحيانًا في تحويل معامل QAudio::State إلى slot
     بايثون (TypeError: Cannot call meta function ... QAudio::State) فيسقط الصوت؛ فحص
     state() وerror() كل نبضة (20 ms) أبسط وأمتن ولا كلفة تُذكر.
+    التقطّع على Windows 11: مؤقّت الواجهة قد يتأخر (حجب النافذة الشفافة وpower throttling وانشغال
+    الرسم)، فنكبّر مخزن الجهاز إلى 250 ms ونملأه بسرعة بعد كل تأخر ونطلب مؤقّتات دقيقة
+    (platform_win/power.py) ونسجّل عدد الانقطاعات والفجوات لتشخيص ما يبقى.
     مستوى الصوت يُطبَّق مربّعًا: master = volume^2 * fade (إدراك الجهارة لوغاريتمي تقريبًا).
 مثال: player.set_volume(0.35); player.set_enabled(True); player.update_params(0.6, 0.4, 0.1, True)
 """
@@ -33,20 +36,23 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 from raindesk.core.constants import (
     AUDIO_BLOCK_MS,
-    AUDIO_BUFFER_MS,
     AUDIO_FADE_MS,
     AUDIO_IDLE_RELEASE_S,
     AUDIO_SAMPLE_RATE,
 )
 from raindesk.engine.math_utils import clamp
 from raindesk.engine.rain_audio import AudioParams, RainSynth
+from raindesk.platform_win import power
 
 _LOG = logging.getLogger(__name__)
 
 _CHANNELS: Final[int] = 2
 _BYTES_PER_FRAME: Final[int] = 4  # int16 * قناتان
 _MS_PER_SECOND: Final[float] = 1000.0
-_MAX_BLOCKS_PER_TICK: Final[int] = 3  # أقصى كتل نملأ بها المخزن في نبضة واحدة (تعويض تأخر قصير)
+_MAX_BLOCKS_PER_TICK: Final[int] = 8  # أقصى كتل نملأ بها المخزن في نبضة واحدة (تعويض تأخر المؤقّت)
+_SINK_BUFFER_MS: Final[int] = 250  # ms: مخزن الجهاز؛ أكبر من الأصل (100) ليتحمّل تأخر مؤقّت الواجهة
+_UNDERRUN_GRACE_S: Final[float] = 1.0  # ثانية بعد الفتح لا نعدّ فيها الفراغ (الملء الأولي)
+_UNDERRUN_LOG_INTERVAL_S: Final[float] = 10.0  # ثانية بين رسائل تحذير الفراغ
 _DEVICE_CHANGE_DEBOUNCE_MS: Final[int] = 500  # ms: دمج إشعارات تغيّر أجهزة الإخراج
 _FADE_STEP_PER_BLOCK: Final[float] = AUDIO_BLOCK_MS / AUDIO_FADE_MS  # تقدّم الغلاف لكل كتلة
 _DEFAULT_VOLUME: Final[float] = 0.35
@@ -87,6 +93,13 @@ class RainAudioPlayer(QObject):
         self._build_closing = False  # True بعد shutdown: نتجاهل ناتج البناء
         self._sink: Any = None
         self._io: Any = None
+        self._timing_boost: power.TimingBoost | None = None
+        self._opened_at = 0.0
+        self._last_tick = 0.0
+        self._max_gap_ms = 0.0  # أطول فجوة بين نبضتين منذ آخر تقرير
+        self._underruns = 0  # مرات وجد فيها الجهاز مخزنه فارغًا (انقطاع مسموع)
+        self._underruns_reported = 0
+        self._last_report = 0.0
         self._block_frames = round(AUDIO_SAMPLE_RATE * AUDIO_BLOCK_MS / _MS_PER_SECOND)
         self._block_bytes = self._block_frames * _BYTES_PER_FRAME
         self._timer = QTimer(self)
@@ -221,7 +234,7 @@ class RainAudioPlayer(QObject):
         self._block_frames = round(rate * AUDIO_BLOCK_MS / _MS_PER_SECOND)
         self._block_bytes = self._block_frames * _BYTES_PER_FRAME
         sink = mm.QAudioSink(device, audio_format, self)
-        sink.setBufferSize(round(rate * _BYTES_PER_FRAME * AUDIO_BUFFER_MS / _MS_PER_SECOND))
+        sink.setBufferSize(round(rate * _BYTES_PER_FRAME * _SINK_BUFFER_MS / _MS_PER_SECOND))
         stream = sink.start()  # وضع push: يعيد QIODevice نكتب فيه الكتل
         if stream is None:
             sink.deleteLater()
@@ -230,6 +243,12 @@ class RainAudioPlayer(QObject):
         self._sink, self._io = sink, stream
         self._fade = 0.0  # كل تشغيل جديد يبدأ بظهور تدريجي (لا نقرة)
         self._silent_since = None
+        self._timing_boost = power.begin_responsive_timing()
+        self._opened_at = time.monotonic()
+        self._last_tick = 0.0
+        self._max_gap_ms = 0.0
+        self._underruns = self._underruns_reported = 0
+        self._last_report = self._opened_at
         self._timer.start()
         self._set_availability(True)
         return True
@@ -280,6 +299,8 @@ class RainAudioPlayer(QObject):
     def _release_device(self) -> None:
         """يوقف المؤقّت ويغلق الجهاز ويصفّر ذيل المولّد؛ آمن عند عدم وجود جهاز."""
         self._timer.stop()
+        power.end_responsive_timing(self._timing_boost)
+        self._timing_boost = None
         sink, self._sink, self._io = self._sink, None, None
         if sink is not None:
             sink.stop()
@@ -303,6 +324,7 @@ class RainAudioPlayer(QObject):
             return
         if self._sink_failed(sink):
             return
+        self._watch_underruns(sink)
         for _ in range(_MAX_BLOCKS_PER_TICK):
             if sink.bytesFree() < self._block_bytes:
                 break  # المخزن ممتلئ بما يكفي: ننتظر النبضة التالية
@@ -320,6 +342,33 @@ class RainAudioPlayer(QObject):
             )
             stream.write(synth.render_int16(self._block_frames, params))
         self._maybe_release_when_silent()
+
+    def _watch_underruns(self, sink: Any) -> None:
+        """يقيس فجوات المؤقّت ويعدّ انقطاعات الصوت (المخزن فارغ) ويسجّلها كل 10 s عند وجودها.
+
+        في وضع push تعني IdleState أن الجهاز استهلك كل ما كتبناه، أي أن النبضة تأخرت أكثر من
+        حجم المخزن؛ هذا هو سبب التقطّع المسموع، وتساعد الأرقام على معرفة من يؤخّر الواجهة.
+        """
+        now = time.monotonic()
+        if self._last_tick:
+            self._max_gap_ms = max(self._max_gap_ms, (now - self._last_tick) * _MS_PER_SECOND)
+        self._last_tick = now
+        mm = self._mm
+        idle = getattr(mm.QAudio.State, "IdleState", None) if mm is not None else None
+        if idle is not None and now - self._opened_at > _UNDERRUN_GRACE_S and sink.state() == idle:
+            self._underruns += 1
+        if now - self._last_report >= _UNDERRUN_LOG_INTERVAL_S:
+            if self._underruns > self._underruns_reported:
+                _LOG.warning(
+                    "audio underruns: %d in the last %.0f s (max timer gap %.0f ms, buffer %d ms)",
+                    self._underruns - self._underruns_reported,
+                    now - self._last_report,
+                    self._max_gap_ms,
+                    _SINK_BUFFER_MS,
+                )
+            self._underruns_reported = self._underruns
+            self._max_gap_ms = 0.0
+            self._last_report = now
 
     def _maybe_release_when_silent(self) -> None:
         """بعد اختفاء كامل لمدة 2 s يُحرَّر الجهاز فلا يبقى مفتوحًا بلا حاجة (توفير طاقة)."""
