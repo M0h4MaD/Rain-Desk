@@ -16,7 +16,7 @@ from typing import Final
 # هوية التطبيق
 # ---------------------------------------------------------------------------
 APP_NAME: Final[str] = "RainDesk"  # الاسم الظاهر واسم مجلدات البيانات
-APP_VERSION: Final[str] = "1.0.0"  # إصدار دلالي (SemVer)
+APP_VERSION: Final[str] = "1.0.1"  # إصدار دلالي (SemVer)
 IPC_SERVER_NAME: Final[str] = "RainDesk.SingleInstance.v1"  # اسم QLocalServer لمنع تعدد النسخ
 
 # مفتاح التشغيل التلقائي؛ يُكتب تحت HKEY_CURRENT_USER فقط (بلا صلاحيات مدير).

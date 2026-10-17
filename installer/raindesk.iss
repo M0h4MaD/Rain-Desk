@@ -2,7 +2,7 @@
 ; الغرض: مثبّت Inno Setup اختياري لـ RainDesk (بديل عن ملف ZIP). يثبّت لكل مستخدم بلا صلاحيات
 ;   مسؤول، ويضيف اختصار قائمة ابدأ، وخيارًا اختياريًا للتشغيل عند تسجيل الدخول.
 ; البناء:  1) python tools/package.py   2) iscc installer\raindesk.iss
-;   الناتج: dist\installer\RainDesk-Setup-1.0.0.exe
+;   الناتج: dist\installer\RainDesk-Setup-1.0.1.exe
 ; ملاحظات:
 ;   * يجب أن يطابق MyAppVersion الإصدار في raindesk/core/constants.py (يتحقق tests/test_packaging.py).
 ;   * أمر التشغيل التلقائي مطابق لما يكتبه التطبيق نفسه: "<exe>" --minimized بمسار مقتبس.
@@ -11,7 +11,7 @@
 ;   * لم يُجرَّب على Windows ضمن هذا المشروع: انظر قائمة التحقق في docs/packaging.md.
 
 #define MyAppName "RainDesk"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppExe "RainDesk.exe"
 
 [Setup]
